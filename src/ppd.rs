@@ -208,7 +208,15 @@ pub fn parse(text: &str) -> Result<Ppd, String> {
                 open = Some(PpdOption { keyword, label, ui, default: None, choices: Vec::new() });
             }
             "CloseUI" | "JCLCloseUI" => match open.take() {
-                Some(o) if o.keyword == value.trim_start_matches('*') => ppd.options.push(o),
+                Some(o) if o.keyword == value.trim_start_matches('*') => match ppd.options.iter_mut().find(|p| p.keyword == o.keyword) {
+                    // The option opened again: its new choices join the first block (CUPS
+                    // merges them too), so each keyword is one option.
+                    Some(first) => {
+                        let new: Vec<Choice> = o.choices.into_iter().filter(|c| first.choice(&c.keyword).is_none()).collect();
+                        first.choices.extend(new);
+                    }
+                    None => ppd.options.push(o),
+                },
                 _ => return Err(format!("line {n}: *{main}: {value} closes no open option")),
             },
             "UIConstraints" => {
@@ -581,6 +589,19 @@ setpagedevice"
         assert_eq!(p.option("A").unwrap().default.as_deref(), Some("Two"));
         assert_eq!(p.option("B").unwrap().default.as_deref(), Some("True"));
         assert!(p.option("Ghost").is_none());
+    }
+
+    /// An option opened twice is one option with the choices of both blocks
+    /// and its default, so resolve keeps the default.
+    #[test]
+    fn repeated_option_is_one_option_with_its_default() {
+        let block = |cs: &str| format!("*OpenUI *A: PickOne\n{cs}*CloseUI: *A\n");
+        let (one, two) = (block("*A One: \"\"\n*A Two: \"\"\n"), block("*A Two: \"\"\n*A Three: \"\"\n"));
+        let p = parse(&format!("{H}*DefaultA: Two\n{one}{two}")).unwrap();
+        assert_eq!(p.options.len(), 1);
+        assert_eq!(keywords(&p.options[0].choices.iter().collect::<Vec<_>>()), ["One", "Two", "Three"]);
+        assert_eq!(p.options[0].default.as_deref(), Some("Two"));
+        assert_eq!(p.resolve(&Selection::new(), None)["A"], "Two");
     }
 
     #[test]
