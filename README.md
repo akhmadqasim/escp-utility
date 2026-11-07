@@ -298,7 +298,10 @@ It matches the desktop file's `StartupWMClass` and the icon name.
 - Dialogs are created when first opened. Slint drops a dialog's window when it
   is hidden, so only open dialogs exist on screen.
 - Every window has a fixed size (equal min/max size hints). GNOME therefore
-  offers no maximize or resize, and does not fullscreen it.
+  offers no maximize or resize, and does not fullscreen it. If a compositor
+  maximizes or fullscreens a window anyway, the app asks for the normal state
+  back on the resize that follows (winit 0.30 accessor, `fixed_size` in
+  `src/main.rs`).
 - winit 0.30 cannot set a parent (`xdg_toplevel.set_parent`) on Wayland, so
   dialogs are not transient children of the sheet.
 

@@ -181,8 +181,30 @@ impl<T> std::ops::Deref for Lazy<T> {
 }
 
 /// Create a dialog component; the platform exists once the sheet does.
-fn make<T>(new: fn() -> Result<T, slint::PlatformError>) -> T {
-    new().expect("cannot create a dialog window")
+fn make<T: ComponentHandle>(new: fn() -> Result<T, slint::PlatformError>) -> T {
+    let d = new().expect("cannot create a dialog window");
+    fixed_size(d.window());
+    d
+}
+
+/// Windows keep their fixed size. Equal minimum and maximum sizes already
+/// stop GNOME from maximizing or fullscreening them; a compositor that does
+/// it anyway resizes the window, and then we ask for the normal state back.
+fn fixed_size(w: &slint::Window) {
+    use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
+    w.on_winit_window_event(|w, event| {
+        if let WindowEvent::Resized(_) = event {
+            w.with_winit_window(|w| {
+                if w.fullscreen().is_some() {
+                    w.set_fullscreen(None);
+                }
+                if w.is_maximized() {
+                    w.set_maximized(false);
+                }
+            });
+        }
+        EventResult::Propagate
+    });
 }
 
 /// The sheet takes clicks again when a dialog is closed with its close box.
@@ -994,6 +1016,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     wire(&app);
 
+    fixed_size(app.main.window());
     app.main.show()?;
     let res = slint::run_event_loop();
     // Let an in-flight status query finish Close/Exit, and keep new ones out

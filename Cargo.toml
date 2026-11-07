@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 libc = "0.2"
-slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software"] }
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software", "unstable-winit-030"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Slint's text stack (fontique) links fontconfig through pkg-config by default.
 # "fontconfig-dlopen" loads libfontconfig.so.1 at run time instead, so no -dev package is needed.
