@@ -75,6 +75,91 @@ pub fn output_sizes() -> &'static [Choice] {
     &SIZES[..16]
 }
 
+/// Paper Type entries listed for CD/DVD (SETTINGS-visibility.md §2.2: the
+/// media whose source mask has the CD/DVD bit).
+const CD_DVD_MEDIA_LIST: [usize; 7] = [1, 2, 3, 4, 5, 6, 9];
+
+/// What the Source combo plus the Borderless radio select. Windows switches
+/// to the hidden source "Sheet (Borderless)" (string 1542) for Borderless,
+/// and each source lists its own types and sizes (SETTINGS-visibility.md §0, §2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feed {
+    Sheet,
+    Borderless,
+    CdDvd,
+}
+
+impl Values {
+    pub fn feed(&self) -> Feed {
+        match (self.source, self.borderless) {
+            (1, _) => Feed::CdDvd,
+            (_, true) => Feed::Borderless,
+            _ => Feed::Sheet,
+        }
+    }
+
+    /// Paper Type combo: indices into `MEDIA`, in CFG order.
+    pub fn media_list(&self) -> Vec<usize> {
+        match self.feed() {
+            Feed::Sheet => (0..MEDIA.len()).collect(),
+            Feed::Borderless => (0..MEDIA.len()).filter(|&i| MEDIA[i].borderless).collect(),
+            Feed::CdDvd => CD_DVD_MEDIA_LIST.to_vec(),
+        }
+    }
+
+    /// Size combo: indices into `SIZES` (Sheet: all; Borderless: the seven
+    /// borderless sizes; CD/DVD: A4 only).
+    pub fn size_list(&self) -> Vec<usize> {
+        match self.feed() {
+            Feed::Sheet => (0..SIZES.len()).collect(),
+            Feed::Borderless => (0..SIZES.len()).filter(|&i| SIZES[i].borderless).collect(),
+            Feed::CdDvd => vec![0],
+        }
+    }
+
+    /// Output Paper combo (Page Layout 3403): printable sizes; CD/DVD: A4.
+    pub fn output_list(&self) -> Vec<usize> {
+        match self.feed() {
+            Feed::CdDvd => vec![0],
+            _ => (0..output_sizes().len()).collect(),
+        }
+    }
+}
+
+/// Main quality radio -> print mode name per media (SETTINGS-visibility.md §2.3).
+fn main_modes(media: usize) -> [&'static str; 5] {
+    match media {
+        0 => ["Fast Economy", "Normal", "Normal", "Fine", "Fine"],
+        1 | 6 => ["Photo", "Photo", "Photo", "Photo", "Photo RPM (Max dpi)"],
+        2..=5 => ["Draft", "Photo", "Photo", "Photo", "Photo RPM (Max dpi)"],
+        10 => ["Normal", "Normal", "Normal", "Fine", "Fine"],
+        _ => ["Photo"; 5],
+    }
+}
+
+/// Advanced > Print Quality 3105 for a media type: (Windows label from
+/// strings 1400-1430, the PPD `PrintQuality` index it is saved as). The PPD
+/// has five qualities, so each mode is saved as the Main option that selects
+/// it on Windows; "Economy" (plain papers) has no Main option and is saved
+/// as Draft (approximate).
+pub fn advanced_qualities(media: usize) -> &'static [(&'static str, usize)] {
+    match media {
+        0 => &[("Economy", 0), ("Fast Economy", 0), ("Normal", 1), ("Fine", 3)],
+        1 | 6 => &[("Photo", 3), ("Photo RPM (Max dpi)", 4)],
+        2..=5 => &[("Draft", 0), ("Photo", 3), ("Photo RPM (Max dpi)", 4)],
+        10 => &[("Normal", 1), ("Fine", 3)],
+        _ => &[("Photo", 3)],
+    }
+}
+
+/// Which Advanced Print Quality entry shows for a Main quality.
+pub fn advanced_quality_pos(media: usize, quality: usize) -> usize {
+    let mode = main_modes(media)[quality.min(4)];
+    let list = advanced_qualities(media);
+    // "Fast Economy" comes after "Economy" on plain papers: match by label.
+    list.iter().position(|(l, _)| *l == mode).unwrap_or(0)
+}
+
 /// Advanced > Color Mode 3143 = `CorrectionColor` (strings 1501, 1504, 1510).
 pub const COLOR_MODES: &[Choice] =
     &[c("EPSONStandard", "EPSON Standard", false), c("EPSONVivid", "EPSON Vivid", false), c("AdobeRGB", "Adobe RGB", false)];
@@ -110,7 +195,7 @@ pub struct Values {
     pub pages_index: usize,
     pub poster_index: usize,
     pub page_borders: bool,
-    /// 1..=99
+    /// 1..=9999 (Page Layout 3427/3428)
     pub copies: u32,
     pub collate: bool,
     pub rotate180: bool,
@@ -180,6 +265,9 @@ impl Values {
         if v.source == 1 || v.media == CD_DVD_MEDIA {
             v.size = 0;
         }
+        if v.source == 1 && !CD_DVD_MEDIA_LIST.contains(&v.media) {
+            v.media = CD_DVD_MEDIA;
+        }
         if v.size >= FIRST_DOCUMENT_SIZE {
             v.reduce = true;
         }
@@ -242,7 +330,7 @@ impl Values {
             (v.multi_page, v.pages_index) = (true, i);
         }
         v.page_borders = matches!(o("page-border"), Some(b) if b != "none");
-        v.copies = o("copies").and_then(|n| n.parse().ok()).filter(|n| (1..=99).contains(n)).unwrap_or(1);
+        v.copies = o("copies").and_then(|n| n.parse().ok()).filter(|n| (1..=9999).contains(n)).unwrap_or(1);
         v.collate = o("collate") == Some("true");
         v
     }
@@ -497,6 +585,31 @@ YellowValue/Yellow: -25 *0 25
         assert_eq!(SIZES[FIRST_DOCUMENT_SIZE].ppd, "A3");
         assert_eq!(MEDIA[CD_DVD_MEDIA].ppd, "CD_DVD");
         assert_eq!(COLOR_MODES[VIVID].ppd, "EPSONVivid");
+    }
+
+    #[test]
+    fn lists_follow_the_source() {
+        let sheet = Values::default();
+        assert_eq!(sheet.media_list().len(), 11);
+        assert_eq!(sheet.size_list().len(), SIZES.len());
+        let bl = Values { media: 2, borderless: true, ..Values::default() };
+        assert_eq!(bl.feed(), Feed::Borderless);
+        assert_eq!(bl.media_list(), vec![1, 2, 3, 4, 5, 6, 7]);
+        let sizes: Vec<&str> = bl.size_list().iter().map(|&i| SIZES[i].ppd).collect();
+        assert_eq!(sizes, ["A4", "4x6in", "5x7in", "3.5x5in", "169widesize", "100x148mm", "Letter"]);
+        let cd = Values { source: 1, ..Values::default() }.constrained();
+        assert_eq!(cd.size_list(), vec![0]);
+        assert_eq!(cd.media, CD_DVD_MEDIA);
+        assert!(cd.media_list().contains(&cd.media));
+    }
+
+    #[test]
+    fn advanced_quality_lists() {
+        assert_eq!(advanced_qualities(0).len(), 4);
+        assert_eq!(advanced_qualities(0)[advanced_quality_pos(0, 1)].0, "Normal"); // Text
+        assert_eq!(advanced_qualities(0)[advanced_quality_pos(0, 0)].0, "Fast Economy"); // Draft
+        assert_eq!(advanced_qualities(2)[advanced_quality_pos(2, 4)].0, "Photo RPM (Max dpi)");
+        assert_eq!(advanced_qualities(9), &[("Photo", 3)]);
     }
 
     #[test]

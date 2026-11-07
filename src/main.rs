@@ -225,6 +225,23 @@ impl App {
 
     fn set_prefs(&self, v: &Values) {
         let p = self.main.global::<Prefs>();
+        // The source-dependent lists and the selected row in each.
+        let labels = |rows: &[usize], table: &[settings::Choice]| -> slint::ModelRc<slint::SharedString> {
+            slint::VecModel::from_slice(&rows.iter().map(|&i| slint::SharedString::from(table[i].label)).collect::<Vec<_>>())
+        };
+        let pos = |rows: &[usize], i: usize| rows.iter().position(|&r| r == i).unwrap_or(0) as i32;
+        let (media, sizes, outputs) = (v.media_list(), v.size_list(), v.output_list());
+        p.set_media_labels(labels(&media, settings::MEDIA));
+        p.set_media_pos(pos(&media, v.media));
+        p.set_size_labels(labels(&sizes, settings::SIZES));
+        p.set_size_pos(pos(&sizes, v.size));
+        p.set_output_labels(labels(&outputs, settings::output_sizes()));
+        p.set_output_pos(pos(&outputs, v.output_size));
+        let qualities = settings::advanced_qualities(v.media);
+        p.set_adv_quality_labels(slint::VecModel::from_slice(
+            &qualities.iter().map(|(l, _)| slint::SharedString::from(*l)).collect::<Vec<_>>(),
+        ));
+        p.set_adv_quality_pos(settings::advanced_quality_pos(v.media, v.quality) as i32);
         p.set_quality(v.quality as i32);
         p.set_source(v.source as i32);
         p.set_media(v.media as i32);
@@ -280,7 +297,7 @@ impl App {
             pages_index: ix(p.get_pages_index()),
             poster_index: ix(p.get_poster_index()),
             page_borders: p.get_page_borders(),
-            copies: p.get_copies().clamp(1, 99) as u32,
+            copies: p.get_copies().clamp(1, 9999) as u32,
             collate: p.get_collate(),
             rotate180: p.get_rotate180(),
             mirror: p.get_mirror(),
@@ -782,9 +799,6 @@ fn fill_lists(p: &Prefs) {
     };
     let labels = |list: &[settings::Choice]| model(list.iter().map(|c| c.label).collect());
     p.set_source_labels(labels(settings::SOURCES));
-    p.set_media_labels(labels(settings::MEDIA));
-    p.set_size_labels(labels(settings::SIZES));
-    p.set_output_labels(labels(settings::output_sizes()));
     p.set_color_mode_labels(labels(settings::COLOR_MODES));
     p.set_gamma_labels(labels(settings::GAMMAS));
     p.set_preset_labels(model(settings::PRESETS.iter().map(|x| x.name).collect()));
@@ -945,7 +959,29 @@ fn wire(ui: &App) {
     });
     let prefs = ui.main.global::<Prefs>();
     // Show Settings / Hide Settings toggles the Current Settings window.
-    prefs.on_edited(on(|a| a.refresh_current_settings()));
+    // After every edit: re-apply the constraints and refill the lists.
+    prefs.on_edited(on(|a| a.set_prefs(&a.prefs())));
+    prefs.on_pick(|list, row| {
+        let Some(a) = app() else { return };
+        let mut v = a.prefs();
+        let row = usize::try_from(row).unwrap_or(0);
+        match list.as_str() {
+            "media" => v.media = v.media_list().get(row).copied().unwrap_or(v.media),
+            "size" => v.size = v.size_list().get(row).copied().unwrap_or(v.size),
+            "output" => v.output_size = v.output_list().get(row).copied().unwrap_or(v.output_size),
+            "quality" => v.quality = settings::advanced_qualities(v.media).get(row).map_or(v.quality, |q| q.1),
+            _ => return,
+        }
+        let p = a.main.global::<Prefs>();
+        // Same rules as any other edit (Prefs.changed): Reduce/Enlarge for
+        // document sizes, then constraints and lists.
+        if v.size >= settings::FIRST_DOCUMENT_SIZE {
+            v.reduce = true;
+        }
+        a.set_prefs(&v.constrained());
+        p.set_dirty(true);
+        p.set_preset(-1);
+    });
     prefs.on_open_dialog(|id| {
         if let Some(a) = app() {
             a.open_dialog(&id);

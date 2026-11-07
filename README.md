@@ -113,10 +113,44 @@ out (PPD UIConstraints, SETTINGS.md §1):
 - Not in the UI: "User Defined" paper size, and the Linux-only CD/DVD print
   position options.
 
-**Not settled yet:** some Windows templates stack several model-dependent
-controls on the same spot, for example Black Ink Only / Grayscale and the
-Advanced tab's Quiet/Fast Mode. Those are left out until their L800 visibility
-is confirmed (phase2/rea/SETTINGS-visibility.md).
+**L800 visibility and lists** (phase2/rea/SETTINGS-visibility.md, from the
+driver code and E_FCF0G5P.CFG):
+- The Main tab has no colour control. Grayscale exists only on Advanced
+  (3115, PPD `Color=Grayscale`).
+- Black Ink Only, Super MicroWeave, Fast Mode, the ICM panel (3164-3174) and
+  panel 3175-3181 are hidden.
+- Quiet Mode is shown on Main and Advanced. Windows enables it only for plain
+  papers at Text or Text & Image; here it is always disabled, because the PPD
+  has no quiet option.
+- The ink box is "Approximate Ink Levels" with six 27 px boxes, 35 px apart,
+  in the order C, M, LM, LC, K, Y. How to Buy stays hidden.
+- Borderless switches to the hidden source "Sheet (Borderless)". Each source
+  lists its own items:
+
+| | Paper Type | Size |
+|---|---|---|
+| Sheet | all 11 | all 21 |
+| Borderless | the 7 borderless papers | A4, 10x15, 13x18, 9x13, 16:9, 100x148, Letter |
+| CD/DVD | 7 photo types + CD/DVD | A4 only |
+
+- Reduce/Enlarge works only on the plain sheet feed.
+- The Advanced quality combo lists each paper type's print modes (strings
+  1400-1430: Economy, Fast Economy, Normal, Fine / Draft, Photo, Photo RPM
+  (Max dpi)). Each is saved as the PPD quality that selects that mode from
+  Main. Plain-paper "Economy" has no Main option and is saved as Draft
+  (approximate).
+- Copies goes to 9999. Pages per Sheet offers 2 and 4. Poster offers 2x1,
+  2x2, 3x3 and 4x4. The Enlargement Method and Watermark combos show their
+  Windows items but stay disabled.
+
+**Open items (low confidence):**
+- The Main quality default was not traced, so the PPD default (Text) is used.
+- The Color Controls default method was not traced; Slide Bar is used.
+- The watermark dialogs are kept disabled.
+- The print-preview dialogs are not built.
+- "User Defined" paper size (dialog 4110) is not offered.
+- The poster Borders/Borderless radios (3420/3421, medium confidence) are not
+  shown.
 On Advanced, the four "Paper & Quality Options" combos are read in template
 order as Source, Type, Quality, Size (M).
 

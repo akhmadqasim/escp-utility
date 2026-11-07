@@ -43,6 +43,10 @@ fn fill_lists(p: &Prefs) {
     p.set_media_borderless(flags(settings::MEDIA));
     p.set_size_borderless(flags(settings::SIZES));
     p.set_first_document_size(settings::FIRST_DOCUMENT_SIZE as i32);
+    p.set_adv_quality_labels(slint::VecModel::from_slice(
+        &settings::advanced_qualities(0).iter().map(|(l, _)| slint::SharedString::from(*l)).collect::<Vec<_>>(),
+    ));
+    p.set_adv_quality_pos(settings::advanced_quality_pos(0, 1) as i32);
     p.set_color_mode(1);
     p.set_gamma(1);
     p.set_quality(1);

@@ -270,9 +270,9 @@ export component Combo inherits Rectangle {
     if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
 }
 
-// EDITTEXT + msctls_updown32: a number stepped through `values`.
+// EDITTEXT + msctls_updown32 stepping through fixed `labels`.
 export component Spin inherits Rectangle {
-    in property <[int]> values;
+    in property <[string]> labels;
     in-out property <int> index;
     in property <bool> enabled: true;
     in property <string> tip;
@@ -285,7 +285,7 @@ export component Spin inherits Rectangle {
         width: parent.width - 21px;
         height: parent.height;
         vertical-alignment: center;
-        text: root.values[root.index];
+        text: root.labels[root.index];
         color: root.enabled ? #000000 : #8a8a8a;
     }
     // up/down arrows, 17 px wide like the updown control
@@ -298,7 +298,7 @@ export component Spin inherits Rectangle {
         border-color: #a0a0a0;
         Text { text: "▲"; font-size: 7px; color: root.enabled ? #333333 : #a0a0a0; horizontal-alignment: center; vertical-alignment: center; }
         up := TouchArea {
-            enabled: root.enabled && root.index + 1 < root.values.length;
+            enabled: root.enabled && root.index + 1 < root.labels.length;
             clicked => {
                 root.index += 1;
                 root.changed();

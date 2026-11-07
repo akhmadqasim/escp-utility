@@ -12,7 +12,10 @@ import { Strings, DlgText, EtchedLine, DlgButton, Group, CheckBox, Radio, Combo,
 import { Slider } from "std-widgets.slint";
 
 export global Prefs {
-    // Lists (Windows labels), set from Rust.
+    // Lists (Windows labels), set from Rust. Type, Size, Output Paper and the
+    // Advanced quality list depend on the source (Sheet, the hidden
+    // borderless source, CD/DVD) and are refilled after every edit; the
+    // `-pos` values are the selected row in them.
     in property <[string]> source-labels;
     in property <[string]> media-labels;
     in property <[string]> size-labels;
@@ -20,6 +23,11 @@ export global Prefs {
     in property <[string]> color-mode-labels;
     in property <[string]> gamma-labels;
     in property <[string]> preset-labels;
+    in property <[string]> adv-quality-labels;
+    in-out property <int> media-pos;
+    in-out property <int> size-pos;
+    in-out property <int> output-pos;
+    in-out property <int> adv-quality-pos;
     in property <[bool]> source-borderless;
     in property <[bool]> media-borderless;
     in property <[bool]> size-borderless;
@@ -68,12 +76,15 @@ export global Prefs {
     // Index of the first size that needs Reduce/Enlarge (A3, A3+, A2, B4, B3).
     in property <int> first-document-size: 16;
     out property <bool> needs-reduce: root.size >= root.first-document-size;
-    out property <bool> cd-dvd: root.source == 1 || root.media == 9;
     out property <bool> vivid: root.color-mode == 1;
+    // Plain sheet feed: Reduce/Enlarge works only here (FUN_68f8d8e4).
+    out property <bool> sheet-feed: root.source == 0 && !(root.borderless && root.borderless-allowed);
     callback reset-defaults();
     callback preset-picked(int);
     // Any edit (Rust refreshes the Current Settings window).
     callback edited();
+    // A row picked in a source-dependent list: "media", "size", "output", "quality".
+    callback pick(string, int);
     // Open a sub-dialog: "color-controls", "custom-settings", "page-order",
     // "poster", "margins", "watermark".
     callback open-dialog(string);
@@ -83,10 +94,6 @@ export global Prefs {
     public function changed() {
         root.dirty = true;
         root.preset = -1;
-        if (root.cd-dvd) {
-            // CD/DVD needs A4.
-            root.size = 0;
-        }
         if (root.needs-reduce) {
             // A3, A3+, A2, B4 and B3 are document sizes: Reduce/Enlarge on.
             root.reduce = true;
@@ -116,14 +123,15 @@ component QualityIcon inherits Rectangle {
 // Ink Levels group box: owner-draw meters, 23x54 px each, 25.5 px apart.
 // Like Windows, they show the approximate levels from the printer status and
 // stay empty when there is no status.
+// Ink box (1977 / 5253): six boxes re-laid-out at run time to 27 px wide,
+// 8 px apart (x = group + 8 + 35n), C, M, LM, LC, K, Y (SETTINGS-visibility.md).
 component InkBox inherits Group {
-    in property <length> meter-x;
     in property <length> meter-y;
     title: "Approximate Ink Levels";
     for ink[i] in Prefs.inks: InkMeter {
-        x: root.meter-x + i * 25.5px;
+        x: 8px + i * 35px;
         y: root.meter-y;
-        width: 23px;
+        width: 27px;
         height: 54px;
         ink: ink;
     }
@@ -157,7 +165,7 @@ export component ShortcutsPage inherits Rectangle {
     CheckBox { x: 14px; y: 364px; width: 204px; height: 29px; text: "Do not display mouse-over messages for Printing Presets."; multiline: true; enabled: false; tip: Strings.windows-only; }
     DlgButton { x: 20px; y: 403px; width: 105px; height: 23px; text: "Add/Remove..."; enabled: false; tip: Strings.windows-only; }
     // 5253 (215,237,222x112); How to Buy (5262) hidden, as on Main.
-    InkBox { x: 215px; y: 237px; width: 222px; height: 112px; meter-x: 7px; meter-y: 20px; }
+    InkBox { x: 215px; y: 237px; width: 222px; height: 112px; meter-y: 20px; }
     CheckBox { x: 300px; y: 364px; width: 92px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
     CheckBox { x: 300px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
     DlgButton { x: 131px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
@@ -189,9 +197,9 @@ export component MainPage inherits Rectangle {
     DlgText { x: 23px; y: 146px; width: 38px; height: 13px; text: "Source"; wrap: no-wrap; }
     Combo { x: 65px; y: 141px; width: 197px; model: Prefs.source-labels; current-index <=> Prefs.source; selected => { Prefs.changed(); } }
     DlgText { x: 32px; y: 171px; width: 26px; height: 13px; text: "Type"; wrap: no-wrap; }
-    Combo { x: 65px; y: 167px; width: 197px; model: Prefs.media-labels; current-index <=> Prefs.media; selected => { Prefs.changed(); } }
+    Combo { x: 65px; y: 167px; width: 197px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; selected => { Prefs.pick("media", self.current-index); } }
     DlgText { x: 35px; y: 200px; width: 26px; height: 13px; text: "Size"; wrap: no-wrap; }
-    Combo { x: 65px; y: 197px; width: 197px; model: Prefs.size-labels; current-index <=> Prefs.size; enabled: !Prefs.cd-dvd; tip: Prefs.cd-dvd ? "CD/DVD printing uses A4." : ""; selected => { Prefs.changed(); } }
+    Combo { x: 65px; y: 197px; width: 197px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; selected => { Prefs.pick("size", self.current-index); } }
     Radio {
         x: 71px; y: 228px; width: 60px; height: 13px; text: "Borders";
         checked: !Prefs.borderless || !Prefs.borderless-allowed;
@@ -215,7 +223,7 @@ export component MainPage inherits Rectangle {
     CheckBox { x: 294px; y: 245px; width: 105px; height: 13px; text: "Quiet Mode"; enabled: false; tip: "No Linux option: the L800 CUPS driver has no quiet mode."; }
 
     // 1977 (14,275,222x98), retitled to string 2082 at run time.
-    InkBox { x: 14px; y: 275px; width: 222px; height: 98px; meter-x: 9px; meter-y: 21px; }
+    InkBox { x: 14px; y: 275px; width: 222px; height: 98px; meter-y: 21px; }
 
     Group { x: 245px; y: 275px; width: 189px; height: 98px; title: "Orientation"; }
     Radio { x: 255px; y: 306px; width: 75px; height: 13px; text: "Portrait"; checked: !Prefs.landscape; picked => { Prefs.landscape = false; Prefs.changed(); } }
@@ -236,9 +244,10 @@ export component AdvancedPage inherits Rectangle {
     background: #ffffff;
     Group { x: 8px; y: 7px; width: 210px; height: 150px; title: "Paper & Quality Options"; }
     Combo { x: 15px; y: 26px; width: 195px; model: Prefs.source-labels; current-index <=> Prefs.source; selected => { Prefs.changed(); } }
-    Combo { x: 15px; y: 52px; width: 195px; model: Prefs.media-labels; current-index <=> Prefs.media; selected => { Prefs.changed(); } }
-    Combo { x: 15px; y: 78px; width: 195px; model: Prefs.quality-labels; current-index <=> Prefs.quality; selected => { Prefs.changed(); } }
-    Combo { x: 15px; y: 104px; width: 195px; model: Prefs.size-labels; current-index <=> Prefs.size; enabled: !Prefs.cd-dvd; tip: Prefs.cd-dvd ? "CD/DVD printing uses A4." : ""; selected => { Prefs.changed(); } }
+    Combo { x: 15px; y: 52px; width: 195px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; selected => { Prefs.pick("media", self.current-index); } }
+    // 3105 Print Quality: the print modes of this paper type (strings 1400-1430).
+    Combo { x: 15px; y: 78px; width: 195px; model: Prefs.adv-quality-labels; current-index <=> Prefs.adv-quality-pos; selected => { Prefs.pick("quality", self.current-index); } }
+    Combo { x: 15px; y: 104px; width: 195px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; selected => { Prefs.pick("size", self.current-index); } }
     Radio {
         x: 17px; y: 132px; width: 68px; height: 13px; text: "Borders";
         checked: !Prefs.borderless || !Prefs.borderless-allowed;
@@ -261,7 +270,10 @@ export component AdvancedPage inherits Rectangle {
     CheckBox { x: 17px; y: 249px; width: 105px; height: 13px; text: "High Speed"; enabled: false; tip: "No Linux option: the L800 filter chooses the print direction for each quality."; }
     CheckBox { x: 17px; y: 270px; width: 105px; height: 13px; text: "Edge Smoothing"; enabled: false; tip: Strings.no-linux; }
     CheckBox { x: 17px; y: 291px; width: 105px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
+    // 3115 Grayscale: the L800's only colour switch (PPD Color=Grayscale).
+    CheckBox { x: 17px; y: 312px; width: 105px; height: 13px; text: "Grayscale"; checked <=> Prefs.grayscale; toggled => { Prefs.changed(); } }
     EtchedLine { x: 14px; y: 336px; width: 195px; }
+    CheckBox { x: 17px; y: 346px; width: 105px; height: 13px; text: "Quiet Mode"; enabled: false; tip: "No Linux option: the L800 CUPS driver has no quiet mode."; }
     Combo { x: 9px; y: 374px; width: 119px; model: []; enabled: false; tip: Strings.windows-only; }
     DlgButton { x: 131px; y: 372px; width: 102px; height: 23px; text: "Save Settings..."; clicked => { Prefs.open-dialog("custom-settings"); } }
 
@@ -338,22 +350,22 @@ export component PageLayoutPage inherits Rectangle {
     CheckBox {
         x: 15px; y: 26px; width: 155px; height: 13px; text: "Reduce/Enlarge Document";
         checked <=> Prefs.reduce;
-        enabled: !Prefs.needs-reduce;
+        enabled: !Prefs.needs-reduce && Prefs.sheet-feed;
         tip: Prefs.needs-reduce ? "This paper size is larger than the printer can print: it must be reduced." : "";
         toggled => { Prefs.changed(); }
     }
     Radio {
         x: 30px; y: 46px; width: 122px; height: 13px; text: "By Output Paper Size";
-        enabled: Prefs.reduce; checked: !Prefs.by-percent;
+        enabled: Prefs.reduce && Prefs.sheet-feed; checked: !Prefs.by-percent;
         picked => { Prefs.by-percent = false; Prefs.changed(); }
     }
-    Combo { x: 15px; y: 63px; width: 195px; model: Prefs.output-labels; current-index <=> Prefs.output-size; enabled: Prefs.reduce && !Prefs.by-percent; selected => { Prefs.changed(); } }
+    Combo { x: 15px; y: 63px; width: 195px; model: Prefs.output-labels; current-index <=> Prefs.output-pos; enabled: Prefs.reduce && !Prefs.by-percent && Prefs.sheet-feed; selected => { Prefs.pick("output", self.current-index); } }
     Radio {
         x: 30px; y: 94px; width: 96px; height: 13px; text: "By Percentage";
-        enabled: Prefs.reduce; checked: Prefs.by-percent;
+        enabled: Prefs.reduce && Prefs.sheet-feed; checked: Prefs.by-percent;
         picked => { Prefs.by-percent = true; Prefs.changed(); }
     }
-    NumberSpin { x: 132px; y: 91px; width: 56px; height: 20px; minimum: 10; maximum: 400; value <=> Prefs.scale; enabled: Prefs.reduce && Prefs.by-percent; changed => { Prefs.changed(); } }
+    NumberSpin { x: 132px; y: 91px; width: 56px; height: 20px; minimum: 10; maximum: 400; value <=> Prefs.scale; enabled: Prefs.reduce && Prefs.by-percent && Prefs.sheet-feed; changed => { Prefs.changed(); } }
     DlgText { x: 195px; y: 94px; width: 12px; height: 13px; text: "%"; }
 
     CheckBox { x: 15px; y: 153px; width: 75px; height: 13px; text: "Multi-Page"; checked <=> Prefs.multi-page; toggled => { Prefs.changed(); } }
@@ -367,8 +379,9 @@ export component PageLayoutPage inherits Rectangle {
         enabled: Prefs.multi-page; checked: Prefs.poster;
         picked => { Prefs.poster = true; Prefs.changed(); }
     }
-    if !Prefs.poster: Spin { x: 45px; y: 219px; width: 57px; height: 20px; values: [2, 4]; index <=> Prefs.pages-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
-    if Prefs.poster: Spin { x: 45px; y: 219px; width: 57px; height: 20px; values: [2, 4, 9, 16]; index <=> Prefs.poster-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
+    // 3410: "2" 3521, "4" 3522. 3416: 2x1 3503, 2x2 3500, 3x3 3501, 4x4 3502.
+    if !Prefs.poster: Spin { x: 45px; y: 219px; width: 57px; height: 20px; labels: ["2", "4"]; index <=> Prefs.pages-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
+    if Prefs.poster: Spin { x: 45px; y: 219px; width: 57px; height: 20px; labels: ["2x1", "2x2", "3x3", "4x4"]; index <=> Prefs.poster-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
     if !Prefs.poster: CheckBox { x: 20px; y: 249px; width: 110px; height: 13px; text: "Print Page Borders"; enabled: Prefs.multi-page; checked <=> Prefs.page-borders; toggled => { Prefs.changed(); } }
     DlgButton {
         x: 135px; y: 258px; width: 78px; height: 23px;
@@ -378,13 +391,13 @@ export component PageLayoutPage inherits Rectangle {
     }
 
     // 3414 (141,172,69x75): our own preview of the sheet layout.
-    LayoutPreview { x: 141px; y: 172px; width: 69px; height: 75px; }
+    if Prefs.multi-page: LayoutPreview { x: 141px; y: 172px; width: 69px; height: 75px; }
 
     Group { x: 8px; y: 319px; width: 210px; height: 104px; title: "Watermark"; }
     // The PPD's watermark data paths (*epcgWatermarkData) point at
     // /home/epson/projects/..., which does not exist, so the filter cannot
     // draw watermarks (SETTINGS.md): shown, but off.
-    Combo { x: 18px; y: 349px; width: 186px; model: ["None"]; current-index: 0; enabled: false; tip: "Off: the installed L800 driver points at watermark files that do not exist, so watermarks would not print."; }
+    Combo { x: 18px; y: 349px; width: 186px; model: ["None", "Confidential", "Draft", "Urgent", "Priority", "Hot", "Do Not Copy", "For Your Eyes Only", "Review Copy", "Top Secret", "Duplicate"]; current-index: 0; enabled: false; tip: "Off: the installed L800 driver points at watermark files that do not exist, so watermarks would not print."; }
     DlgButton { x: 23px; y: 382px; width: 84px; height: 23px; text: "Add/Del..."; enabled: false; tip: "No Linux option: the L800 driver has only the ten built-in watermarks."; }
     DlgButton { x: 114px; y: 382px; width: 84px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("watermark"); } }
 
@@ -396,7 +409,7 @@ export component PageLayoutPage inherits Rectangle {
 
     Group { x: 225px; y: 124px; width: 210px; height: 96px; title: "Copies"; }
     DlgText { x: 279px; y: 143px; width: 33px; height: 13px; text: "Copies"; wrap: no-wrap; }
-    NumberSpin { x: 324px; y: 140px; width: 61px; height: 20px; minimum: 1; maximum: 99; value <=> Prefs.copies; changed => { Prefs.changed(); } }
+    NumberSpin { x: 324px; y: 140px; width: 61px; height: 20px; minimum: 1; maximum: 9999; value <=> Prefs.copies; changed => { Prefs.changed(); } }
     CheckBox { x: 234px; y: 167px; width: 89px; height: 13px; text: "Reverse Order"; checked <=> Prefs.reverse; toggled => { Prefs.changed(); } }
     CheckBox { x: 234px; y: 192px; width: 87px; height: 13px; text: "Collate"; checked <=> Prefs.collate; toggled => { Prefs.changed(); } }
     // 3431 (341,169,86x42): our own collate picture.
@@ -404,7 +417,7 @@ export component PageLayoutPage inherits Rectangle {
 
     Group { x: 225px; y: 223px; width: 210px; height: 135px; title: "Borderless"; }
     DlgText { x: 240px; y: 244px; width: 131px; height: 13px; text: "Enlargement Method"; wrap: no-wrap; color: #8a8a8a; }
-    Combo { x: 233px; y: 263px; width: 195px; model: []; enabled: false; tip: "No Linux option: the L800 PPD has no borderless expansion control."; }
+    Combo { x: 233px; y: 263px; width: 195px; model: ["Auto Expand", "Retain Size"]; current-index: 0; enabled: false; tip: "No Linux option: the L800 PPD has no borderless expansion control."; }
     DlgText { x: 240px; y: 302px; width: 50px; height: 13px; text: "Expansion"; wrap: no-wrap; color: #8a8a8a; }
     Slider { x: 296px; y: 296px; width: 132px; height: 36px; minimum: 0; maximum: 2; value: 2; enabled: false; }
     DlgText { x: 297px; y: 335px; width: 23px; height: 13px; text: "Min"; color: #8a8a8a; }
