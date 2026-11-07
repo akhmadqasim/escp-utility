@@ -133,10 +133,11 @@ fn at_least_min_wait<T>(f: impl FnOnce() -> T) -> T {
 }
 
 /// A dialog that is created (and wired) on first use. Slint's winit backend
-/// creates a toplevel for every window component when the event loop starts,
-/// shown or not, and GNOME then lists each as a separate, unknown app. A
-/// window that is hidden again is dropped by Slint, so with this only the
-/// dialogs that are open exist on screen.
+/// creates a toplevel for every window component once the event loop runs,
+/// shown or not, and GNOME then lists each as a separate, unknown app. On
+/// Wayland a window that is hidden again is dropped by Slint (X11 unmaps
+/// it), so with this only the dialogs that are open exist on screen. Check
+/// a dialog with `shown`, never through its window: that creates it.
 type Lazy<T> = std::cell::LazyCell<T, fn() -> T>;
 
 /// A dialog that is open (never-created dialogs are not).
@@ -157,17 +158,23 @@ fn make<T: ComponentHandle>(new: fn() -> Result<T, slint::PlatformError>) -> T {
 /// Windows keep their fixed size. Equal minimum and maximum sizes already
 /// stop GNOME from maximizing or fullscreening them; a compositor that does
 /// it anyway resizes the window, and then we ask for the normal state back.
+/// Only once per change: a compositor that keeps the state answers each
+/// request with another configure (and resize), which must not loop.
 fn fixed_size(w: &slint::Window) {
     use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
-    w.on_winit_window_event(|w, event| {
+    // (fullscreen, maximized) as the last resize found them.
+    let mut last = (false, false);
+    w.on_winit_window_event(move |w, event| {
         if let WindowEvent::Resized(_) = event {
             w.with_winit_window(|w| {
-                if w.fullscreen().is_some() {
+                let now = (w.fullscreen().is_some(), w.is_maximized());
+                if now.0 && !last.0 {
                     w.set_fullscreen(None);
                 }
-                if w.is_maximized() {
+                if now.1 && !last.1 {
                     w.set_maximized(false);
                 }
+                last = now;
             });
         }
         EventResult::Propagate
@@ -544,7 +551,7 @@ impl App {
     fn start(&self, u: Utility) {
         // Windows runs these dialogs modally: no second utility while one is
         // reading status, spooling, or showing cleaning progress.
-        if self.wait.window().is_visible() || self.progress.window().is_visible() {
+        if shown(&self.wait) || shown(&self.progress) {
             return;
         }
         self.show_wait(u);
@@ -1204,11 +1211,9 @@ mod dialogs {
 
     pub fn color_controls() -> ColorControlsDialog {
         let d = make(ColorControlsDialog::new);
-        if let Some(a) = app() {
-            let p = a.main.global::<Prefs>();
-            d.set_color_mode_labels(p.get_color_mode_labels());
-            d.set_gamma_labels(p.get_gamma_labels());
-        }
+        // The same fixed lists as the sheet's (fill_lists).
+        d.set_color_mode_labels(strings(settings::COLOR_MODES.iter().map(|c| c.label)));
+        d.set_gamma_labels(strings(settings::GAMMAS.iter().map(|c| c.label)));
         d.on_ok(on(|a| a.color_controls_ok()));
         d.on_cancel(on(|a| a.close(&a.color_controls)));
         d
