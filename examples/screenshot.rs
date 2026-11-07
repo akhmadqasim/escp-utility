@@ -87,7 +87,18 @@ fn main() {
     d.set_body("The print head is being cleaned.\nPlease wait.\nCaution: keep the CD/DVD tray out until cleaning has finished.".into());
     d.set_bar_visible(true);
     d.set_value(0.45);
+    d.set_animate(false);
+    d.set_frame(4); // cyan group, mid-sweep
     render(&p, "progress-223", (420, 335), || d.show(), &out);
+    // Every animation frame, for review.
+    for f in 0..12 {
+        d.set_frame(f);
+        render(&p, &format!("anim-223-{f:02}"), (420, 335), || d.show(), &out);
+    }
+
+    let d = PaperGuideDialog::new().unwrap();
+    d.set_body("Plain paper is used to clean the inside of the printer.\n\nLoad A4 or Letter plain paper in the printer, then click [Cleaning].\nRepeat this until the inside of the printer is clean.".into());
+    render(&p, "paper-guide-265", (420, 335), || d.show(), &out);
 
     let d = CleaningDoneDialog::new().unwrap();
     d.set_body("The cleaning cycle has finished.\n\nTo check that it worked, click [Print Nozzle Check Pattern].".into());

@@ -36,9 +36,10 @@ as the Windows texts.
 | Power Cleaning | Works, as the second radio option in Head Cleaning, with the transportation-lock warning (dialog 360) |
 | EPSON Status Monitor 3 | Works: status title and message from the Windows status table, approximate levels of the 6 ink tanks, polled every 5 s while open. [Print Queue] opens the GNOME printer settings |
 | Printer and Option Information | Shows what CUPS reports for the queue (`lpstat -l -p/-v/-a/-o`), read-only |
-| Print Head Alignment | Disabled ("Not available on Linux yet"): deferred, because it writes persistent values with `DD`/`SV` |
-| Paper Guide Cleaning | Disabled |
-| Speed & Progress..., Driver Update | Disabled. Monitoring Preferences lives inside Speed & Progress on Windows |
+| Paper Guide Cleaning | Works like Windows on the L800, which is a no-op: pre-check, dialog 265 [Cancel] [**Cleaning**], then the paused/offline re-check, and **no bytes are sent**. Windows looks for its script RCDATA 1900, which does not exist in the L800 data DLL (`E_IHBRG5P`), so `FUN_00407dc4` opens and closes an empty RAW job. Then the dialog closes (rea/NOTES.md §5) |
+| Driver Update | Opens Epson's L800 Linux download page with `xdg-open`. Windows runs Epson's own updater (`E_GUPA30.EXE`), which has no Linux equivalent |
+| Print Head Alignment | Disabled. Its tooltip says why: it writes permanent calibration values (`DD`/`SV`) to the printer, so it stays off until a test run is approved |
+| Speed & Progress... | Disabled. Its tooltip says why: these are Windows print-spooler settings only. Monitoring Preferences lives inside this dialog on Windows |
 | Language | English only (the driver has no other UI strings) |
 
 The Windows Maintenance tab has no Print Queue button for this driver, so this
@@ -85,9 +86,17 @@ on the IEEE 1284.4 (D4) EPSON-CTRL channel (socket 2), answered with a binary
 `@BDC ST2` reply. It talks 1284.4 directly over the kernel usblp node
 `/dev/usb/lpN` (found by `MDL:L800;` in sysfs).
 
-- usblp stays bound, so nothing changes for CUPS. A query takes about 60 ms.
+- usblp stays bound, so nothing changes for CUPS. One live query, including
+  the `lpstat` check, took 63 ms (measured 2026-11-07). The stale-data drain
+  before Enter waits at most 200 ms; on this printer it did not wait.
 - Each poll opens the node, then sends Enter, Init, OpenChannel, the status
-  request, CloseChannel and Exit. Exit is always sent, also after an error.
+  request, CloseChannel and Exit. Once Enter is acknowledged, Exit is always
+  sent, also after an error. A reply that arrived is kept even if closing
+  fails (the error is logged). Exit is **not** sent when Enter gets no reply:
+  then we cannot tell whether the printer is in 1284.4 mode, and in normal
+  mode the Exit packet would be stray print data. Gutenprint's escputil and
+  Epson's ecbd behave the same way. Every job starts with the "exit packet
+  mode" preamble anyway, so the next job takes the printer out of 1284.4 mode.
 - The app queries only when `lpstat -o L800` succeeds and shows no job. A job
   is never handed to `lp` while a session is open, and on exit the app waits
   for a running session to finish.
@@ -101,6 +110,12 @@ on the IEEE 1284.4 (D4) EPSON-CTRL channel (socket 2), answered with a binary
   `[ink id, colour, level, 02]`, in the order C, M, LM, LC, BK, Y. The levels are
   the printer's estimates (the tanks have no sensor), so they are labelled
   approximate, as on Windows.
+- Status Monitor messages follow the Windows table row by row (E_IABRG5P
+  `GetStatusCode`, 33 rows of ST/ER/WR). Error rows apply only with ST=00.
+  One warning is matched: the first with high nibble 7, else 2, 4, 3, 1,
+  else the first warning (E_IAPRG5P `FUN_18007b850`). There are rows only for
+  warnings 0x10-0x15, 0x20 and 0x71-0x76. So a higher-ranked 0x4x warning
+  hides "Ink low" on Windows too, and the window shows the ST row instead.
 
 **Access.** The usblp node is `root:lp 0660` on a stock system. It works here
 only because Epson's `79-udev-epson.rules` makes it `0777`. To give just the
@@ -194,7 +209,8 @@ in `ui/app.slint`.
 | Nozzle Check 2 | 211 | 435×414 | Good / Cleaning needed samples, instructions, [Clean] [**Finish**] |
 | Head Cleaning 1 | 220 / 226 | 420×372 | instructions, (•) Cleaning ( ) Power Cleaning, [Cancel] [**Start**] |
 | Power Cleaning confirm | 360 | 435×414 | warning, transportation-lock picture, [Cancel] [**OK**] |
-| Head Cleaning progress | 223 | 420×335 | moving print head, progress bar (status path only) |
+| Head Cleaning progress | 223 | 420×335 | our own 12-frame animation (a wiper sweeps a streaky "A" clean; 3 frames each in black, cyan, magenta, yellow; 500 ms per frame), progress bar (status path only) |
+| Paper Guide Cleaning | 265 | 420×335 | no caption (string 1112 is absent), instructions, [Cancel] [**Cleaning**] |
 | Head Cleaning done | 224 / 227 | 420×335 | "cleaning cycle has finished" / "finished when the power light stops flashing", [**Print Nozzle Check Pattern**] [Finish] |
 | Messages | 270 / 271 | 371×197 | "A problem has occurred." [Details] [**OK**] / "… can not be completed.", "Now cleaning!" [**OK**] |
 | EPSON Status Monitor 3 | `E_IASRG5P` dialog 102, as arranged at run time (E_IAPRG5P `FUN_180033c9c`, detail mode) | 479×412 | white; status title (16 px), message box, picture, "Approximate Ink Levels" (6 tanks), note, [Print Queue] [**OK**] |
@@ -222,6 +238,8 @@ Head Cleaning:  220/226 --Start (Cleaning)----------> 201 (spool) --> 223 (statu
                  |      --Start (Power Cleaning)--> 360 --OK--^      '-(no status / gave up)--> 227
                  '--Cancel--> close                       '--Cancel--> 220/226
                 224/227 --Print Nozzle Check Pattern--> Nozzle Check
+Paper Guide:    265 --Cleaning--> 201 (re-check, queue check; nothing is sent) --> close
+                 '--Cancel--> close
 Errors:         queue paused / not accepting / lp failed --> 271;  ST=00 before spooling --> 270
 ```
 
@@ -232,6 +250,7 @@ Errors:         queue paused / not accepting / lp failed --> 271;  ST=00 before 
 | Nozzle Check → Print | RCDATA 1800 + trailer | 132 |
 | Head Cleaning → Start (Cleaning) | RCDATA 1802, CH byte 5 = 00, + trailer | 92 |
 | Head Cleaning → Start (Power Cleaning) → OK | RCDATA 1802, CH byte 5 = 10, + trailer | 92 |
+| Paper Guide Cleaning → Cleaning | none (RCDATA 1900 is absent on the L800; Windows spools an empty job) | 0 |
 
 ## Layout of the code
 

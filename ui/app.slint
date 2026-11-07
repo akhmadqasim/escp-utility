@@ -553,7 +553,8 @@ component CleaningAnimation inherits Rectangle {
     Text { x: 33px; y: 18px; width: 40px; height: 42px; text: "A"; font-size: 38px; font-weight: 900; color: root.ink; horizontal-alignment: center; }
     Rectangle {
         x: root.dirty-x; width: root.dirty-w; clip: true;
-        for i in 6: Rectangle { x: -root.dirty-x + 30px; y: 26px + i * 6px; width: 46px; height: 2px; background: #cfcfcf; }
+        // Bands across the letter, kept inside the fan.
+        for i in 4: Rectangle { x: -root.dirty-x + 34px + i * 1px; y: 26px + i * 6px; width: 38px - i * 2px; height: 2px; background: #cfcfcf; }
     }
     Path {
         width: 106px; height: 64px; viewbox-width: 106; viewbox-height: 64;
