@@ -733,6 +733,7 @@ mod tests {
             let mut flat: Vec<&str> = s.media.iter().flat_map(|m| m.choices.iter().map(|c| c.1.as_str())).collect();
             for m in &s.media {
                 let mut radios: Vec<usize> = m.choices.iter().map(|c| c.0).collect();
+                radios.sort_unstable();
                 radios.dedup();
                 assert_eq!(radios.len(), m.choices.len(), "{path:?} {} radios", m.label);
                 assert!(!m.label.is_empty(), "{path:?} empty media label");

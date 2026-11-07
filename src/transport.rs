@@ -161,13 +161,26 @@ mod tests {
         d
     }
 
-    /// A fake lpstat that prints `stdout`, `stderr` and exits with `code`.
-    fn stub(dir: &Path, stdout: &str, stderr: &str, code: i32) -> String {
+    /// A fake lpstat, `dir/name`, that prints `stdout`, `stderr` and exits with `code`.
+    fn stub(dir: &Path, name: &str, stdout: &str, stderr: &str, code: i32) -> String {
         use std::os::unix::fs::PermissionsExt;
-        let p = dir.join("lpstat");
+        let p = dir.join(name);
         std::fs::write(&p, format!("#!/bin/sh\nprintf '%s' '{stdout}'\nprintf '%s' '{stderr}' >&2\nexit {code}\n")).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p.to_str().unwrap().to_string()
+    }
+
+    /// `queue_problem_with` on a stub just written. A child that another test
+    /// forks may hold the file open for writing until it execs, so a "Text
+    /// file busy" start is retried.
+    fn problem(lpstat: &str, queue: &str) -> Option<String> {
+        for _ in 0..100 {
+            match queue_problem_with(lpstat, queue) {
+                Some(m) if m.contains("Text file busy") => std::thread::sleep(std::time::Duration::from_millis(10)),
+                r => return r,
+            }
+        }
+        panic!("{lpstat} stays busy")
     }
 
     #[test]
@@ -213,20 +226,20 @@ mod tests {
     #[test]
     fn queue_problem_idle_paused_rejecting_via_stub() {
         let dir = scratch("stub-ok");
-        let idle = stub(&dir, "printer L800 is idle.  enabled since x\nL800 accepting requests since x\n", "", 0);
-        assert_eq!(queue_problem_with(&idle, "L800"), None);
-        let paused = stub(&dir, "printer L800 disabled since x -\n\tPaused\nL800 accepting requests since x\n", "", 0);
-        assert!(queue_problem_with(&paused, "L800").unwrap().contains("paused"));
-        let rej = stub(&dir, "printer L800 is idle.  enabled since x\nL800 not accepting requests since x -\n", "", 0);
-        assert!(queue_problem_with(&rej, "L800").unwrap().contains("not accepting"));
+        let idle = stub(&dir, "idle", "printer L800 is idle.  enabled since x\nL800 accepting requests since x\n", "", 0);
+        assert_eq!(problem(&idle, "L800"), None);
+        let paused = stub(&dir, "paused", "printer L800 disabled since x -\n\tPaused\nL800 accepting requests since x\n", "", 0);
+        assert!(problem(&paused, "L800").unwrap().contains("paused"));
+        let rej = stub(&dir, "rejecting", "printer L800 is idle.  enabled since x\nL800 not accepting requests since x -\n", "", 0);
+        assert!(problem(&rej, "L800").unwrap().contains("not accepting"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn queue_problem_missing_queue_and_lpstat_failure_are_errors() {
         let dir = scratch("stub-err");
-        let missing = stub(&dir, "", "lpstat: Invalid destination name in list \"NOPE\".", 1);
-        let msg = queue_problem_with(&missing, "NOPE").unwrap();
+        let missing = stub(&dir, "missing", "", "lpstat: Invalid destination name in list \"NOPE\".", 1);
+        let msg = problem(&missing, "NOPE").unwrap();
         assert!(msg.contains("NOPE") && msg.contains("Invalid destination"), "{msg}");
         assert!(queue_problem_with(dir.join("absent").to_str().unwrap(), "L800").unwrap().starts_with("Cannot run lpstat"));
         std::fs::remove_dir_all(dir).unwrap();

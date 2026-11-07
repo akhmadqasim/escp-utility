@@ -19,6 +19,10 @@ use std::time::Duration;
 /// Option keyword -> choice keyword.
 pub type Selection = BTreeMap<String, String>;
 
+/// Candidates `Ppd::resolve` tries in one group of options before it gives
+/// up and keeps the conflict, so no PPD can stall the sheet.
+const SEARCH_STEPS: usize = 10_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ui {
     PickOne,
@@ -209,12 +213,9 @@ pub fn parse(text: &str) -> Result<Ppd, String> {
             }
             "CloseUI" | "JCLCloseUI" => match open.take() {
                 Some(o) if o.keyword == value.trim_start_matches('*') => match ppd.options.iter_mut().find(|p| p.keyword == o.keyword) {
-                    // The option opened again: its new choices join the first block (CUPS
+                    // The option opened again: its choices join the first block's (CUPS
                     // merges them too), so each keyword is one option.
-                    Some(first) => {
-                        let new: Vec<Choice> = o.choices.into_iter().filter(|c| first.choice(&c.keyword).is_none()).collect();
-                        first.choices.extend(new);
-                    }
+                    Some(first) => first.choices.extend(o.choices),
                     None => ppd.options.push(o),
                 },
                 _ => return Err(format!("line {n}: *{main}: {value} closes no open option")),
@@ -283,20 +284,31 @@ impl Ppd {
     }
 
     /// A complete, conflict-free selection: one value per PPD option (keys
-    /// the PPD lacks are dropped). Options are settled one by one, `edited`
-    /// (the one the user just changed; it keeps a valid value) first, then
-    /// the rest in PPD order. Each takes the first of its value from `sel`,
-    /// its default, then its other choices, that conflicts with no option
-    /// settled before it and still lets the later ones settle: when a later
-    /// option has no fitting choice left, the options that ruled its choices
-    /// out are settled again, so an A-B-C constraint chain ends conflict
-    /// free. When no conflict-free selection exists, each option takes its
-    /// first candidate that fits the ones before it (else its first one) and
-    /// the conflict stays. Same input, same output.
+    /// the PPD lacks are dropped). Options tied by constraints (directly or
+    /// through others) form a group, settled apart from the other groups.
+    /// In a group options are settled one by one, `edited` (the one the user
+    /// just changed; it keeps a valid value) first, then PPD order. Each
+    /// takes the first of its value from `sel`, its default, then its other
+    /// choices, that conflicts with no option settled before it and still
+    /// lets the later ones settle: when a later option has no fitting choice
+    /// left, the options that ruled its choices out are settled again, so an
+    /// A-B-C constraint chain ends conflict free. When a group has no
+    /// conflict-free selection (or the search gives up after `SEARCH_STEPS`
+    /// tries), each of its options takes its first candidate that fits the
+    /// ones before it, else its first one, and the conflict stays. Same
+    /// input, same output.
     pub fn resolve(&self, sel: &Selection, edited: Option<&str>) -> Selection {
         let is_edited = |o: &&PpdOption| Some(o.keyword.as_str()) == edited;
         let mut order: Vec<&PpdOption> = self.options.iter().filter(|o| !o.choices.is_empty()).collect();
         order.sort_by_key(|o| !is_edited(o));
+        // group[i]: the first option of order[i]'s group.
+        let pos = |k: &str| order.iter().position(|o| o.keyword == k);
+        let links: Vec<(usize, usize)> = self.constraints.iter().filter_map(|k| Some((pos(&k.a.0)?, pos(&k.b.0)?))).collect();
+        let mut group: Vec<usize> = (0..order.len()).collect();
+        while let Some(&(a, b)) = links.iter().find(|&&(a, b)| group[a] != group[b]) {
+            let (keep, drop) = (group[a].min(group[b]), group[a].max(group[b]));
+            group.iter_mut().filter(|g| **g == drop).for_each(|g| *g = keep);
+        }
         let candidates: Vec<Vec<&str>> = order
             .iter()
             .map(|o| {
@@ -310,14 +322,20 @@ impl Ppd {
                 wanted.into_iter().chain(o.default.as_deref().filter(valid)).chain(all).filter(|c| seen.insert(*c)).collect()
             })
             .collect();
-        let mut picks = Vec::with_capacity(order.len());
-        if self.settle(&order, &candidates, &mut picks).is_err() {
-            for (o, c) in order.iter().zip(&candidates) {
-                let fits = |k: &&str| self.culprit(&order, &picks, &o.keyword, k).is_none();
-                picks.push(c.iter().copied().find(fits).unwrap_or(c[0]));
+        let mut out = Selection::new();
+        for g in 0..order.len() {
+            let members: Vec<usize> = (0..order.len()).filter(|&i| group[i] == g).collect();
+            let (order, candidates): (Vec<&PpdOption>, Vec<Vec<&str>>) = members.iter().map(|&i| (order[i], candidates[i].clone())).unzip();
+            let (mut picks, mut steps) = (Vec::with_capacity(order.len()), SEARCH_STEPS);
+            if self.settle(&order, &candidates, &mut picks, &mut steps).is_err() {
+                for (o, c) in order.iter().zip(&candidates) {
+                    let fits = |k: &&str| self.culprit(&order, &picks, &o.keyword, k).is_none();
+                    picks.push(c.iter().copied().find(fits).unwrap_or(c[0]));
+                }
             }
+            out.extend(order.iter().zip(picks).map(|(o, c)| (o.keyword.clone(), c.to_string())));
         }
-        order.iter().zip(picks).map(|(o, c)| (o.keyword.clone(), c.to_string())).collect()
+        out
     }
 
     /// The first of the options settled so far (`picks`, the values of
@@ -332,20 +350,29 @@ impl Ppd {
 
     /// Depth-first search for `resolve` with conflict-directed backjumping:
     /// extends `picks` (the choices of `order[..picks.len()]`) to all of
-    /// `order`, or returns the settled options to blame for the dead end. A
-    /// dead end the current option is not to blame for goes straight back
-    /// past it, so options unrelated to a conflict are never retried.
-    fn settle<'a>(&self, order: &[&PpdOption], candidates: &[Vec<&'a str>], picks: &mut Vec<&'a str>) -> Result<(), BTreeSet<usize>> {
+    /// `order`, or returns the settled options to blame for the dead end
+    /// (none: no earlier option can help, or `steps` ran out). A dead end
+    /// the current option is not to blame for goes straight back past it, so
+    /// options unrelated to a conflict are never retried.
+    fn settle<'a>(
+        &self,
+        order: &[&PpdOption],
+        candidates: &[Vec<&'a str>],
+        picks: &mut Vec<&'a str>,
+        steps: &mut usize,
+    ) -> Result<(), BTreeSet<usize>> {
         let i = picks.len();
         let Some(o) = order.get(i) else { return Ok(()) };
         let mut blame = BTreeSet::new();
         for &c in &candidates[i] {
+            let Some(left) = steps.checked_sub(1) else { return Err(BTreeSet::new()) };
+            *steps = left;
             if let Some(j) = self.culprit(order, picks, &o.keyword, c) {
                 blame.insert(j);
                 continue;
             }
             picks.push(c);
-            let Err(mut b) = self.settle(order, candidates, picks) else { return Ok(()) };
+            let Err(mut b) = self.settle(order, candidates, picks, steps) else { return Ok(()) };
             picks.truncate(i);
             if !b.remove(&i) {
                 return Err(b);
@@ -585,7 +612,7 @@ setpagedevice"
     #[test]
     fn repeated_option_is_one_option_with_its_default() {
         let block = |cs: &str| format!("*OpenUI *A: PickOne\n{cs}*CloseUI: *A\n");
-        let (one, two) = (block("*A One: \"\"\n*A Two: \"\"\n"), block("*A Two: \"\"\n*A Three: \"\"\n"));
+        let (one, two) = (block("*A One: \"\"\n*A Two: \"\"\n"), block("*A Three: \"\"\n"));
         let p = parse(&format!("{H}*DefaultA: Two\n{one}{two}")).unwrap();
         assert_eq!(p.options.len(), 1);
         assert_eq!(keywords(&p.options[0].choices.iter().collect::<Vec<_>>()), ["One", "Two", "Three"]);
@@ -803,13 +830,15 @@ setpagedevice"
         assert_eq!(p.resolve(&edited, None), edited);
     }
 
-    /// A dead end goes back only to the options that ruled choices out, never
-    /// through the free ones in between (10^10 combinations here).
+    /// A dead end goes back only to the options that ruled choices out, not
+    /// through the options in between (9^10 combinations here, far more than
+    /// SEARCH_STEPS): X moves to x2 so that Y fits.
     #[test]
     fn resolve_skips_free_options_on_a_dead_end() {
-        let mut text = format!("{H}*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*X x1: \"\"\n*CloseUI: *X\n");
+        let mut text = format!("{H}*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*X x1: \"\"\n*X x2: \"\"\n*CloseUI: *X\n");
         for n in 0..10 {
-            text += &format!("*OpenUI *F{n}: PickOne\n");
+            // Tied to X, so in its group, and free with c0.
+            text += &format!("*UIConstraints: *X x1 *F{n} c9\n*OpenUI *F{n}: PickOne\n");
             for c in 0..10 {
                 text += &format!("*F{n} c{c}: \"\"\n");
             }
@@ -817,9 +846,40 @@ setpagedevice"
         }
         text += "*OpenUI *Y: PickOne\n*Y y1: \"\"\n*CloseUI: *Y\n";
         let p = parse(&text).unwrap();
-        // Unsatisfiable: X and Y keep their only choices, the conflict stays.
         let out = p.resolve(&Selection::new(), None);
-        assert_eq!((out["X"].as_str(), out["F9"].as_str(), out["Y"].as_str()), ("x1", "c0", "y1"));
+        assert_eq!((out["X"].as_str(), out["F9"].as_str(), out["Y"].as_str()), ("x2", "c0", "y1"));
+        assert!(p.conflicts(&out).is_empty());
+    }
+
+    /// A group without a conflict-free selection keeps its conflict alone:
+    /// the chain beside it still settles.
+    #[test]
+    fn unsatisfiable_group_leaves_the_others_alone() {
+        let xy = "*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*X x1: \"\"\n*CloseUI: *X\n*OpenUI *Y: PickOne\n*Y y1: \"\"\n*CloseUI: *Y\n";
+        let p = parse(&format!("{CHAIN}{xy}")).unwrap();
+        let out = p.resolve(&sel(&[("A", "a1"), ("B", "b2"), ("C", "c1")]), Some("C"));
+        assert_eq!((out["A"].as_str(), out["B"].as_str(), out["C"].as_str()), ("a2", "b1", "c1"));
+        assert_eq!((out["X"].as_str(), out["Y"].as_str()), ("x1", "y1"));
+        assert_eq!(p.conflicts(&out).len(), 1);
+    }
+
+    /// An unsatisfiable group too large to search (20^4 dead ends: R needs one
+    /// of P, Q, S, T off all its choices) gives up after SEARCH_STEPS tries
+    /// and keeps the greedy picks.
+    #[test]
+    fn resolve_gives_up_on_a_huge_dead_end() {
+        let mut text = H.to_string();
+        for (o, r) in [("P", "r1"), ("Q", "r2"), ("S", "r3"), ("T", "r4")] {
+            text += &format!("*OpenUI *{o}: PickOne\n");
+            for c in 0..20 {
+                text += &format!("*{o} {c}: \"\"\n*UIConstraints: *{o} {c} *R {r}\n");
+            }
+            text += &format!("*CloseUI: *{o}\n");
+        }
+        text += "*OpenUI *R: PickOne\n*R r1: \"\"\n*R r2: \"\"\n*R r3: \"\"\n*R r4: \"\"\n*CloseUI: *R\n";
+        let p = parse(&text).unwrap();
+        let out = p.resolve(&Selection::new(), None);
+        assert_eq!(out, sel(&[("P", "0"), ("Q", "0"), ("S", "0"), ("T", "0"), ("R", "r1")]));
         assert_eq!(p.conflicts(&out).len(), 1);
     }
 

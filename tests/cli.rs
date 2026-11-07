@@ -27,12 +27,12 @@ impl Shim {
         fs::write(dir.join("jobs"), jobs).unwrap();
         let d = dir.display();
         let lpstat = format!(
-            "#!/bin/sh\necho \"lpstat $*\" >> {d}/log\ncase \"$1\" in\n  -v) cat {d}/lpstat_v ;;\n  -o) cat {d}/jobs ;;\nesac\nexit 0\n"
+            "#!/bin/sh\necho \"lpstat $*\" >> '{d}/log'\ncase \"$1\" in\n  -v) cat '{d}/lpstat_v' ;;\n  -o) cat '{d}/jobs' ;;\nesac\nexit 0\n"
         );
         let lpoptions = format!(
-            "#!/bin/sh\necho \"lpoptions $*\" >> {d}/log\nfor a in \"$@\"; do [ \"$a\" = -l ] && {{ echo 'PageSize/Media Size: *A4 Letter'; exit 0; }}; done\necho \"printer-make-and-model='Epson L800 Series'\"\n"
+            "#!/bin/sh\necho \"lpoptions $*\" >> '{d}/log'\nfor a in \"$@\"; do [ \"$a\" = -l ] && {{ echo 'PageSize/Media Size: *A4 Letter'; exit 0; }}; done\necho \"printer-make-and-model='Epson L800 Series'\"\n"
         );
-        let lp = format!("#!/bin/sh\necho \"lp $*\" >> {d}/log\nexit 0\n");
+        let lp = format!("#!/bin/sh\necho \"lp $*\" >> '{d}/log'\nexit 0\n");
         for (n, body) in [("lpstat", lpstat), ("lpoptions", lpoptions), ("lp", lp)] {
             let p = dir.join("bin").join(n);
             fs::write(&p, body).unwrap();
@@ -41,17 +41,27 @@ impl Shim {
         Shim { dir }
     }
 
+    /// Run the binary. A child that another test forks may hold a shim open
+    /// for writing until it execs, so a run that hit "Text file busy" is
+    /// repeated.
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(BIN)
-            .args(args)
-            .env_clear()
-            .env("PATH", format!("{}:/usr/bin:/bin", self.dir.join("bin").display()))
-            .env("HOME", self.dir.join("home"))
-            .env("XDG_CACHE_HOME", self.dir.join("home/.cache"))
-            .env("XDG_CONFIG_HOME", self.dir.join("home/.config"))
-            .env("LC_ALL", "C")
-            .output()
-            .unwrap()
+        for _ in 0..100 {
+            let o = Command::new(BIN)
+                .args(args)
+                .env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", self.dir.join("bin").display()))
+                .env("HOME", self.dir.join("home"))
+                .env("XDG_CACHE_HOME", self.dir.join("home/.cache"))
+                .env("XDG_CONFIG_HOME", self.dir.join("home/.config"))
+                .env("LC_ALL", "C")
+                .output()
+                .unwrap();
+            if !(stdout(&o) + &stderr(&o)).contains("Text file busy") {
+                return o;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the shims stay busy")
     }
 
     fn log(&self) -> String {
