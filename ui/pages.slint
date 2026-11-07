@@ -48,6 +48,13 @@ export global Prefs {
     in-out property <bool> collate;
     in-out property <bool> rotate180;
     in-out property <bool> mirror;
+    // Color Controls (dialog 4300), -25..25 each.
+    in-out property <int> brightness;
+    in-out property <int> contrast;
+    in-out property <int> saturation;
+    in-out property <int> cyan;
+    in-out property <int> magenta;
+    in-out property <int> yellow;
     in-out property <int> preset: -1;
     // Something changed since the last load/save (enables Apply).
     in-out property <bool> dirty;
@@ -67,6 +74,9 @@ export global Prefs {
     callback preset-picked(int);
     // Any edit (Rust refreshes the Current Settings window).
     callback edited();
+    // Open a sub-dialog: "color-controls", "custom-settings", "page-order",
+    // "poster", "margins", "watermark".
+    callback open-dialog(string);
 
     // After every edit: mark dirty and apply the PPD constraints the way the
     // Windows driver greys things out (SETTINGS.md §1).
@@ -253,7 +263,7 @@ export component AdvancedPage inherits Rectangle {
     CheckBox { x: 17px; y: 291px; width: 105px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
     EtchedLine { x: 14px; y: 336px; width: 195px; }
     Combo { x: 9px; y: 374px; width: 119px; model: []; enabled: false; tip: Strings.windows-only; }
-    DlgButton { x: 131px; y: 372px; width: 102px; height: 23px; text: "Save Settings..."; enabled: false; tip: Strings.windows-only; }
+    DlgButton { x: 131px; y: 372px; width: 102px; height: 23px; text: "Save Settings..."; clicked => { Prefs.open-dialog("custom-settings"); } }
 
     Group { x: 225px; y: 7px; width: 210px; height: 359px; title: "Color Management"; }
     Radio { x: 234px; y: 26px; width: 90px; height: 13px; text: "Color Controls"; checked: true; }
@@ -264,7 +274,7 @@ export component AdvancedPage inherits Rectangle {
     Combo { x: 297px; y: 94px; width: 129px; model: Prefs.color-mode-labels; current-index <=> Prefs.color-mode; selected => { Prefs.changed(); } }
     DlgText { x: 234px; y: 128px; width: 38px; height: 13px; text: "Gamma"; wrap: no-wrap; }
     Combo { x: 297px; y: 122px; width: 129px; model: Prefs.gamma-labels; current-index <=> Prefs.gamma; enabled: !Prefs.vivid; tip: Prefs.vivid ? "Gamma 1.8 cannot be used with EPSON Vivid." : ""; selected => { Prefs.changed(); } }
-    DlgButton { x: 345px; y: 151px; width: 81px; height: 23px; text: "Settings..."; enabled: false; tip: "Color Controls (brightness, contrast, saturation, cyan, magenta, yellow) is not built yet."; }
+    DlgButton { x: 345px; y: 151px; width: 81px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("color-controls"); } }
 
     CheckBox { x: 300px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
     DlgButton { x: 14px; y: 403px; width: 110px; height: 23px; text: "Reset Defaults"; clicked => { Prefs.reset-defaults(); } }
@@ -360,7 +370,12 @@ export component PageLayoutPage inherits Rectangle {
     if !Prefs.poster: Spin { x: 45px; y: 219px; width: 57px; height: 20px; values: [2, 4]; index <=> Prefs.pages-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
     if Prefs.poster: Spin { x: 45px; y: 219px; width: 57px; height: 20px; values: [2, 4, 9, 16]; index <=> Prefs.poster-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
     if !Prefs.poster: CheckBox { x: 20px; y: 249px; width: 110px; height: 13px; text: "Print Page Borders"; enabled: Prefs.multi-page; checked <=> Prefs.page-borders; toggled => { Prefs.changed(); } }
-    DlgButton { x: 135px; y: 258px; width: 78px; height: 23px; text: Prefs.poster ? "Settings..." : "Page Order..."; enabled: false; tip: Strings.no-linux; }
+    DlgButton {
+        x: 135px; y: 258px; width: 78px; height: 23px;
+        text: Prefs.poster ? "Settings..." : "Page Order...";
+        enabled: Prefs.multi-page;
+        clicked => { Prefs.open-dialog(Prefs.poster ? "poster" : "page-order"); }
+    }
 
     // 3414 (141,172,69x75): our own preview of the sheet layout.
     LayoutPreview { x: 141px; y: 172px; width: 69px; height: 75px; }
@@ -371,12 +386,12 @@ export component PageLayoutPage inherits Rectangle {
     // draw watermarks (SETTINGS.md): shown, but off.
     Combo { x: 18px; y: 349px; width: 186px; model: ["None"]; current-index: 0; enabled: false; tip: "Off: the installed L800 driver points at watermark files that do not exist, so watermarks would not print."; }
     DlgButton { x: 23px; y: 382px; width: 84px; height: 23px; text: "Add/Del..."; enabled: false; tip: "No Linux option: the L800 driver has only the ten built-in watermarks."; }
-    DlgButton { x: 114px; y: 382px; width: 84px; height: 23px; text: "Settings..."; enabled: false; tip: "Watermark colour, position, density and size are not built yet."; }
+    DlgButton { x: 114px; y: 382px; width: 84px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("watermark"); } }
 
     Group { x: 225px; y: 8px; width: 210px; height: 112px; title: "2-sided printing"; }
     Radio { x: 234px; y: 29px; width: 51px; height: 13px; text: "Off"; checked: true; enabled: false; tip: Strings.no-linux; }
     Radio { x: 234px; y: 49px; width: 51px; height: 13px; text: "On"; enabled: false; tip: Strings.no-linux; }
-    DlgButton { x: 252px; y: 70px; width: 90px; height: 23px; text: "Margins..."; enabled: false; tip: Strings.no-linux; }
+    DlgButton { x: 252px; y: 70px; width: 90px; height: 23px; text: "Margins..."; clicked => { Prefs.open-dialog("margins"); } }
     CheckBox { x: 330px; y: 99px; width: 95px; height: 13px; text: "Folded Booklet"; enabled: false; tip: Strings.no-linux; }
 
     Group { x: 225px; y: 124px; width: 210px; height: 96px; title: "Copies"; }

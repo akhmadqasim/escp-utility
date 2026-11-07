@@ -70,6 +70,7 @@ Windows does for its utility launch code (EPUT). The desktop entry uses
 | Reverse Order (Main and Page Layout) | `outputorder` |
 | Grayscale | `Color=Grayscale` |
 | Color Mode, Gamma | `CorrectionColor`, `GammaValue` |
+| Color Controls (Advanced > Settings..., dialog 4300, slide bars) | `BrightnessValue`, `ContrastValue`, `SaturationValue`, `CyanValue`, `MagentaValue`, `YellowValue` (-25..25) |
 | Reduce/Enlarge: By Output Paper Size / By Percentage | `ReduceEnlarge`, `OutputPaper`, `ScaleRatio` (10-400 %) |
 | Multi-Page: Pages per Sheet (2, 4) / Print Page Borders | `number-up`, `page-border` |
 | Multi-Page: Poster Printing (2, 4, 9, 16 sheets) | `PosterPrinting` 2x1/2x2/3x3/4x4 |
@@ -78,8 +79,9 @@ Windows does for its utility launch code (EPUT). The desktop entry uses
 | Shortcuts: Printing Presets (7, from E_FUIXG5P.XML) | they set source, type, size, borderless and orientation |
 | Reset Defaults | the PPD defaults |
 
-The presets' QUALITY/SPEED and colour fields have no known mapping, so the
-presets leave quality and colour alone.
+The presets' QUALITY/SPEED and colour fields have no known mapping (neither
+SETTINGS.md nor the XML defines them), so the presets leave quality and colour
+alone.
 
 **Constraints.** These are enforced like the Windows driver greys controls
 out (PPD UIConstraints, SETTINGS.md §1):
@@ -101,8 +103,13 @@ out (PPD UIConstraints, SETTINGS.md §1):
 - **Watermark** is shown but off. The installed PPD's watermark data paths
   point at `/home/epson/projects/...`, which does not exist, so the filter could
   not draw them.
-- Not built yet: Color Controls (Settings..., six sliders that map to
-  `BrightnessValue` … `YellowValue`) and Watermark Settings.
+- Sub-dialogs with nothing to map are shown as the Windows layout with every
+  control disabled and the reason in a tooltip. OK, Cancel and Close just close
+  them. These are Page Order (4630), Poster Settings (4700), Margins (4750),
+  Save Settings / Custom Settings (4500) and Watermark (16200). Their control
+  tables are generated from LAYOUT.json into `src/layouts.rs`. In Color
+  Controls, Density and the Color Circle method are disabled. The preview
+  picture is our own drawing, with an approximate tint.
 - Not in the UI: "User Defined" paper size, and the Linux-only CD/DVD print
   position options.
 

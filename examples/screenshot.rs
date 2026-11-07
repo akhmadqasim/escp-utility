@@ -15,6 +15,9 @@ use slint::{ComponentHandle, PhysicalSize, PlatformError};
 
 slint::include_modules!();
 
+#[path = "../src/layouts.rs"]
+mod layouts;
+
 #[path = "../src/settings.rs"]
 #[allow(dead_code)] // only the tables are used here
 mod settings;
@@ -110,6 +113,34 @@ fn main() {
     prefs.set_multi_page(false);
     prefs.set_collate(false);
     prefs.set_reduce(false);
+
+    let d = ColorControlsDialog::new().unwrap();
+    d.set_color_mode_labels(main.global::<Prefs>().get_color_mode_labels());
+    d.set_gamma_labels(main.global::<Prefs>().get_gamma_labels());
+    d.set_color_mode(1);
+    d.set_gamma(1);
+    d.set_brightness(5);
+    d.set_cyan(-10);
+    d.set_yellow(12);
+    render(&p, "color-controls-4300", (555, 496), || d.show(), &out);
+
+    for (name, l) in [
+        ("page-order-4630", &layouts::PAGE_ORDER),
+        ("poster-4700", &layouts::POSTER),
+        ("margins-4750", &layouts::MARGINS),
+        ("custom-settings-4500", &layouts::CUSTOM_SETTINGS),
+        ("watermark-16200", &layouts::WATERMARK),
+    ] {
+        let d = LayoutDialog::new().unwrap();
+        d.set_caption(l.caption.into());
+        d.set_reason(l.reason.into());
+        d.set_client_w(l.size.0);
+        d.set_client_h(l.size.1);
+        let controls: Vec<LayoutControl> =
+            l.controls.iter().map(|&(kind, x, y, w, h, text)| LayoutControl { kind, x, y, w, h, text: text.into() }).collect();
+        d.set_controls(slint::VecModel::from_slice(&controls));
+        render(&p, name, (l.size.0 as u32, l.size.1 as u32), || d.show(), &out);
+    }
 
     let d = CurrentSettingsDialog::new().unwrap();
     let lines: Vec<SettingLine> = [

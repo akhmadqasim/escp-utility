@@ -5,6 +5,7 @@
 //! Without one it takes the no-status path (226, then 227). See README.md.
 
 mod commands;
+mod layouts;
 mod settings;
 mod status;
 mod transport;
@@ -173,6 +174,8 @@ struct App {
     info: TextDialog,
     dump: TextDialog,
     current_settings: CurrentSettingsDialog,
+    color_controls: ColorControlsDialog,
+    layout_dialog: LayoutDialog,
     /// The last pre-check got a status reply (Windows +0x51C / +0x6C).
     have_status: Cell<bool>,
     progress_state: RefCell<Progress>,
@@ -209,6 +212,8 @@ impl App {
             self.monitor.window(),
             self.info.window(),
             self.dump.window(),
+            self.color_controls.window(),
+            self.layout_dialog.window(),
         ]
         .iter()
         .any(|w| w.is_visible());
@@ -243,6 +248,12 @@ impl App {
         p.set_collate(v.collate);
         p.set_rotate180(v.rotate180);
         p.set_mirror(v.mirror);
+        p.set_brightness(v.brightness);
+        p.set_contrast(v.contrast);
+        p.set_saturation(v.saturation);
+        p.set_cyan(v.cyan);
+        p.set_magenta(v.magenta);
+        p.set_yellow(v.yellow);
         self.refresh_current_settings();
     }
 
@@ -273,8 +284,68 @@ impl App {
             collate: p.get_collate(),
             rotate180: p.get_rotate180(),
             mirror: p.get_mirror(),
+            brightness: p.get_brightness(),
+            contrast: p.get_contrast(),
+            saturation: p.get_saturation(),
+            cyan: p.get_cyan(),
+            magenta: p.get_magenta(),
+            yellow: p.get_yellow(),
         }
         .constrained()
+    }
+
+    /// The sub-dialogs of the settings pages.
+    fn open_dialog(&self, id: &str) {
+        let layout = match id {
+            "color-controls" => {
+                let v = self.prefs();
+                let d = &self.color_controls;
+                d.set_color_mode(v.color_mode as i32);
+                d.set_gamma(v.gamma as i32);
+                d.set_brightness(v.brightness);
+                d.set_contrast(v.contrast);
+                d.set_saturation(v.saturation);
+                d.set_cyan(v.cyan);
+                d.set_magenta(v.magenta);
+                d.set_yellow(v.yellow);
+                return self.open(d);
+            }
+            "custom-settings" => &layouts::CUSTOM_SETTINGS,
+            "page-order" => &layouts::PAGE_ORDER,
+            "poster" => &layouts::POSTER,
+            "margins" => &layouts::MARGINS,
+            "watermark" => &layouts::WATERMARK,
+            _ => return,
+        };
+        let d = &self.layout_dialog;
+        d.set_caption(layout.caption.into());
+        d.set_reason(layout.reason.into());
+        d.set_client_w(layout.size.0);
+        d.set_client_h(layout.size.1);
+        let controls: Vec<LayoutControl> = layout
+            .controls
+            .iter()
+            .map(|&(kind, x, y, w, h, text)| LayoutControl { kind, x, y, w, h, text: text.into() })
+            .collect();
+        d.set_controls(slint::VecModel::from_slice(&controls));
+        self.open(d);
+    }
+
+    /// Color Controls [OK]: take its values into the sheet (Apply/OK saves them).
+    fn color_controls_ok(&self) {
+        let d = &self.color_controls;
+        let mut v = self.prefs();
+        v.color_mode = usize::try_from(d.get_color_mode()).unwrap_or(1);
+        v.gamma = usize::try_from(d.get_gamma()).unwrap_or(1);
+        v.brightness = d.get_brightness();
+        v.contrast = d.get_contrast();
+        v.saturation = d.get_saturation();
+        v.cyan = d.get_cyan();
+        v.magenta = d.get_magenta();
+        v.yellow = d.get_yellow();
+        self.set_prefs(&v.constrained());
+        self.main.global::<Prefs>().set_dirty(true);
+        self.close(d);
     }
 
     /// The Current Settings window (dialog 4050): labels are strings 4053-4079.
@@ -797,6 +868,8 @@ fn main() -> Result<(), slint::PlatformError> {
         info: TextDialog::new()?,
         dump: TextDialog::new()?,
         current_settings: CurrentSettingsDialog::new()?,
+        color_controls: ColorControlsDialog::new()?,
+        layout_dialog: LayoutDialog::new()?,
         have_status: Cell::new(false),
         progress_state: RefCell::new(Progress::default()),
         poll_timer: Timer::default(),
@@ -808,6 +881,9 @@ fn main() -> Result<(), slint::PlatformError> {
     app.main.set_dry_run(app.dry_run());
     app.main.set_current_tab(if args.utility { 4 } else { 1 });
     fill_lists(&app.main.global::<Prefs>());
+    let p = app.main.global::<Prefs>();
+    app.color_controls.set_color_mode_labels(p.get_color_mode_labels());
+    app.color_controls.set_gamma_labels(p.get_gamma_labels());
     app.set_prefs(&Values::default());
     let queue = app.queue.clone();
     bg(move || settings::load(&queue), |app, res| match res {
@@ -870,6 +946,14 @@ fn wire(ui: &App) {
     let prefs = ui.main.global::<Prefs>();
     // Show Settings / Hide Settings toggles the Current Settings window.
     prefs.on_edited(on(|a| a.refresh_current_settings()));
+    prefs.on_open_dialog(|id| {
+        if let Some(a) = app() {
+            a.open_dialog(&id);
+        }
+    });
+    ui.color_controls.on_ok(on(|a| a.color_controls_ok()));
+    ui.color_controls.on_cancel(on(|a| a.close(&a.color_controls)));
+    ui.layout_dialog.on_dismiss(on(|a| a.close(&a.layout_dialog)));
     prefs.on_toggle_settings(on(|a| {
         let shown = a.current_settings.window().is_visible();
         let _ = if shown { a.current_settings.hide() } else { a.current_settings.show() };
@@ -909,6 +993,8 @@ fn wire(ui: &App) {
         ui.message.window(),
         ui.info.window(),
         ui.dump.window(),
+        ui.color_controls.window(),
+        ui.layout_dialog.window(),
     ] {
         w.on_close_requested(|| {
             Timer::single_shot(Duration::ZERO, on(|a| a.refresh_busy()));

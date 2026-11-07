@@ -115,6 +115,13 @@ pub struct Values {
     pub collate: bool,
     pub rotate180: bool,
     pub mirror: bool,
+    /// Color Controls (dialog 4300), each -25..=25.
+    pub brightness: i32,
+    pub contrast: i32,
+    pub saturation: i32,
+    pub cyan: i32,
+    pub magenta: i32,
+    pub yellow: i32,
 }
 
 impl Default for Values {
@@ -145,6 +152,12 @@ impl Default for Values {
             collate: false,
             rotate180: false,
             mirror: false,
+            brightness: 0,
+            contrast: 0,
+            saturation: 0,
+            cyan: 0,
+            magenta: 0,
+            yellow: 0,
         }
     }
 }
@@ -213,6 +226,13 @@ impl Values {
         }
         v.rotate180 = get("Rotate180") == Some("On");
         v.mirror = get("MirrorImage") == Some("On");
+        let level = |k: &str| get(k).and_then(|x| x.parse::<i32>().ok()).map_or(0, |n| n.clamp(-25, 25));
+        v.brightness = level("BrightnessValue");
+        v.contrast = level("ContrastValue");
+        v.saturation = level("SaturationValue");
+        v.cyan = level("CyanValue");
+        v.magenta = level("MagentaValue");
+        v.yellow = level("YellowValue");
 
         let o = |k: &str| opts.get(k).map(String::as_str);
         v.landscape = matches!(o("orientation-requested"), Some("4") | Some("5"));
@@ -257,6 +277,12 @@ impl Values {
             ("PosterPrinting", if self.multi_page && self.poster { POSTERS[self.poster_index].0 } else { "Off" }.into()),
             ("Rotate180", if self.rotate180 { "On" } else { "Off" }.into()),
             ("MirrorImage", if self.mirror { "On" } else { "Off" }.into()),
+            ("BrightnessValue", self.brightness.to_string()),
+            ("ContrastValue", self.contrast.to_string()),
+            ("SaturationValue", self.saturation.to_string()),
+            ("CyanValue", self.cyan.to_string()),
+            ("MagentaValue", self.magenta.to_string()),
+            ("YellowValue", self.yellow.to_string()),
             ("orientation-requested", if self.landscape { "4" } else { "3" }.into()),
             ("outputorder", if self.reverse { "reverse" } else { "normal" }.into()),
             (
@@ -396,6 +422,12 @@ MirrorImage/Mirror Image: *Off On
 Watermark/Watermark: *None Confidential Draft Urgent Priority Hot DoNotCopy ForYourEyesOnly ReviewCopy TopSecret Duplicate
 CorrectionColor/Color Mode: EPSONStandard *EPSONVivid AdobeRGB
 GammaValue/Gamma: 1.8 *2.2
+BrightnessValue/Brightness: -25 -5 *0 25
+ContrastValue/Contrast: -25 *0 25
+SaturationValue/Saturation: -25 *0 25
+CyanValue/Cyan: -25 *0 25
+MagentaValue/Magenta: -25 *0 25
+YellowValue/Yellow: -25 *0 25
 ";
     const DEST: &str = "copies=1 finishings=3 number-up=1 printer-info=L800 printer-make-and-model='Epson L800 Series' printer-state=3";
 
@@ -424,6 +456,9 @@ GammaValue/Gamma: 1.8 *2.2
             copies: 3,
             collate: true,
             mirror: true,
+            brightness: -5,
+            cyan: 25,
+            yellow: -25,
             ..Values::default()
         };
         let opts = v.to_options();
