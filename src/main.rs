@@ -452,6 +452,9 @@ impl App {
     /// off the UI thread; the sheet waits meanwhile. In dry-run the command is
     /// only shown. `quit` (OK) closes the sheet once saved.
     fn save_prefs(&self, quit: bool) {
+        // Number edits commit: their text now shows the (clamped) value saved.
+        let p = self.main.global::<Prefs>();
+        p.set_commit_tick(p.get_commit_tick() + 1);
         let v = self.prefs();
         if self.dry_run() {
             let args = settings::save_args(&self.queue, &v);
@@ -1161,6 +1164,24 @@ mod tests {
             assert_eq!(shown(p.get_size_labels(), p.get_size_pos()), settings::SIZES[want.size].label);
             assert_eq!(shown(p.get_output_labels(), p.get_output_pos()), settings::output_sizes()[want.output_size].label);
         }
+    }
+
+    /// Copies typed out of range are saved clamped to 1..9999, and the
+    /// commit tick moves so the edit shows that value.
+    #[test]
+    fn copies_are_clamped_and_committed() {
+        let _ = slint::platform::set_platform(Box::new(Headless));
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), "L800".into()).unwrap();
+        let p = app.main.global::<Prefs>();
+        fill_lists(&p);
+        p.set_copies(0);
+        assert_eq!(app.prefs().copies, 1);
+        p.set_copies(12000);
+        assert_eq!(app.prefs().copies, 9999);
+        let tick = p.get_commit_tick();
+        app.save_prefs(false); // dry run: shows the command, saves nothing
+        assert_eq!(p.get_commit_tick(), tick + 1);
+        assert!(!p.get_dirty());
     }
 
     fn args(v: &[&str]) -> Result<Args, String> {

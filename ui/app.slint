@@ -256,7 +256,17 @@ export component MainWindow inherits Window {
     DlgButton { x: root.width - 6px - 75px; y: root.btn-y; width: 75px; height: 23px; text: "Help"; enabled: false; tip: Strings.no-help; }
 
     // Swallow clicks while a utility dialog is open.
-    if root.busy: TouchArea { width: 100%; height: 100%; }
+    // While a utility dialog is open the sheet is inert, like a Windows
+    // modal owner: clicks are swallowed, and this scope takes the keyboard
+    // focus so no key reaches a page control.
+    if root.busy: FocusScope {
+        width: 100%;
+        height: 100%;
+        init => { self.focus(); }
+        key-pressed(e) => { accept }
+        key-released(e) => { accept }
+        TouchArea { }
+    }
 }
 
 export struct SettingLine {

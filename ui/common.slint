@@ -304,7 +304,17 @@ export component NumberSpin inherits Rectangle {
     in property <int> minimum;
     in property <int> maximum;
     in property <bool> enabled: true;
+    // Bumped before OK/Apply save: the text shows exactly the saved value.
+    in property <int> commit;
     callback changed;
+    // The edit always ends up showing `value`: when it changes from outside
+    // (load, Reset Defaults), when the edit loses focus, and on commit.
+    changed value => {
+        if (!input.has-focus) {
+            input.text = root.value;
+        }
+    }
+    changed commit => { input.text = root.value; }
     background: root.enabled ? #ffffff : #f4f4f4;
     border-width: 1px;
     border-color: #7a7a7a;
@@ -325,6 +335,11 @@ export component NumberSpin inherits Rectangle {
             }
         }
         accepted => { self.text = root.value; }
+        changed has-focus => {
+            if (!self.has-focus) {
+                self.text = root.value;
+            }
+        }
     }
     Rectangle {
         x: parent.width - 17px;

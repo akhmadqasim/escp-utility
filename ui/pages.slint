@@ -66,6 +66,8 @@ export global Prefs {
     in-out property <int> preset: -1;
     // Something changed since the last load/save (enables Apply).
     in-out property <bool> dirty;
+    // Bumped by Rust before saving: number edits show the saved value.
+    in-out property <int> commit-tick;
     // Approximate ink levels from one status query when the sheet opens.
     in property <[InkLevel]> inks;
     // The Current Settings window (dialog 4050) is open.
@@ -358,7 +360,7 @@ export component PageLayoutPage inherits Rectangle {
         enabled: Prefs.reduce && Prefs.sheet-feed; checked: Prefs.by-percent;
         picked => { Prefs.by-percent = true; Prefs.changed(); }
     }
-    NumberSpin { x: 132px; y: 91px; width: 56px; height: 20px; minimum: 10; maximum: 400; value <=> Prefs.scale; enabled: Prefs.reduce && Prefs.by-percent && Prefs.sheet-feed; changed => { Prefs.changed(); } }
+    NumberSpin { x: 132px; y: 91px; width: 56px; height: 20px; minimum: 10; maximum: 400; value <=> Prefs.scale; commit: Prefs.commit-tick; enabled: Prefs.reduce && Prefs.by-percent && Prefs.sheet-feed; changed => { Prefs.changed(); } }
     DlgText { x: 195px; y: 94px; width: 12px; height: 13px; text: "%"; }
 
     CheckBox { x: 15px; y: 153px; width: 75px; height: 13px; text: "Multi-Page"; checked <=> Prefs.multi-page; toggled => { Prefs.changed(); } }
@@ -402,7 +404,7 @@ export component PageLayoutPage inherits Rectangle {
 
     Group { x: 225px; y: 124px; width: 210px; height: 96px; title: "Copies"; }
     DlgText { x: 279px; y: 143px; width: 33px; height: 13px; text: "Copies"; wrap: no-wrap; }
-    NumberSpin { x: 324px; y: 140px; width: 61px; height: 20px; minimum: 1; maximum: 9999; value <=> Prefs.copies; changed => { Prefs.changed(); } }
+    NumberSpin { x: 324px; y: 140px; width: 61px; height: 20px; minimum: 1; maximum: 9999; value <=> Prefs.copies; commit: Prefs.commit-tick; changed => { Prefs.changed(); } }
     CheckBox { x: 234px; y: 167px; width: 89px; height: 13px; text: "Reverse Order"; checked <=> Prefs.reverse; toggled => { Prefs.changed(); } }
     CheckBox { x: 234px; y: 192px; width: 87px; height: 13px; text: "Collate"; checked <=> Prefs.collate; toggled => { Prefs.changed(); } }
     // 3431 (341,169,86x42): our own collate picture.
