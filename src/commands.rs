@@ -29,6 +29,10 @@
 //! | 0x0001 | string N: first byte = length, then bytes | `FUN_00408e50`                 |
 //! | 0x216  | string N with byte `flags` replaced by the cleaning type | `FUN_00409b3c` |
 //!
+//! After the script, `FUN_004082ec` always appends the job-end trailer from
+//! `FUN_0040b248`: `E_IHBRG5P` string 4302 (fallback copy at 0x403308). It is
+//! skipped only when a script sets opcode 0x212, and neither script does.
+//!
 //! Cross-check with Gutenprint 5.3.5 `src/escputil/escputil.c`. It uses the
 //! same "exit packet mode" header (`exit_packet_mode_old`), the same
 //! `ESC ( R 08 00 00 REMOTE1` envelope (`start_remote_sequence`), and
@@ -48,6 +52,11 @@ pub const ENTER_REMOTE: &[u8] = b"\x1b(R\x08\x00\x00REMOTE1";
 pub const EXIT_REMOTE: &[u8] = b"\x1b\x00\x00\x00";
 /// Opcode 0x105: job start. `E_IHBRG5P` has no string 4301, so the default at 0x402f38 is used.
 pub const JOB_START: &[u8] = b"JS\x04\x00\x00\x00\x00\x00";
+/// Job-end trailer, `E_IHBRG5P` string 4302
+/// `1A,1B,40,1B,40,1B,28,52,08,00,00,52,45,4D,4F,54,45,31,4A,45,01,00,00,1B,00,00,00`
+/// (the leading 0x1A = 26 is the length byte): ESC @ ESC @, enter remote,
+/// `JE 01 00 00` (job end), exit remote.
+pub const JOB_END_TRAILER: &[u8] = b"\x1b@\x1b@\x1b(R\x08\x00\x00REMOTE1JE\x01\x00\x00\x1b\x00\x00\x00";
 /// Opcode 0x10a.
 pub const VI: &[u8] = b"VI\x02\x00\x00\x00";
 /// Opcode 0x10b.
@@ -120,7 +129,8 @@ impl Cleaning {
 
 /// Nozzle check job, `E_IHBRG5P` RT_RCDATA 1800 (17 records):
 /// 0x104, 0x102, 0x100, 0x106, 0x105, (0x0001 string 1528), 0x101,
-/// 0x109, 0x108, 0x109, 0x108, 0x100, 0x10a, 0x10b, 0x101, 0x103, end.
+/// 0x109, 0x108, 0x109, 0x108, 0x100, 0x10a, 0x10b, 0x101, 0x103, end,
+/// then the job-end trailer.
 pub fn nozzle_check_job(ts: Timestamp) -> Vec<u8> {
     let mut v = Vec::with_capacity(128);
     v.extend_from_slice(EXIT_PACKET_MODE);
@@ -136,12 +146,13 @@ pub fn nozzle_check_job(ts: Timestamp) -> Vec<u8> {
     v.extend_from_slice(LD);
     v.extend_from_slice(EXIT_REMOTE);
     v.extend_from_slice(FORM_FEED);
+    v.extend_from_slice(JOB_END_TRAILER);
     v
 }
 
 /// Head cleaning job, `E_IHBRG5P` RT_RCDATA 1802 (7 records):
-/// 0x104, 0x102, 0x100, 0x106, (0x216 flags 5, string 1527), 0x101, end.
-/// There is no job start, VI/LD or form feed in this script.
+/// 0x104, 0x102, 0x100, 0x106, (0x216 flags 5, string 1527), 0x101, end,
+/// then the job-end trailer. There is no job start, VI/LD or form feed in this script.
 pub fn head_cleaning_job(kind: Cleaning, ts: Timestamp) -> Vec<u8> {
     let mut ch = HEAD_CLEANING;
     ch[5] = kind.type_byte();
@@ -152,6 +163,7 @@ pub fn head_cleaning_job(kind: Cleaning, ts: Timestamp) -> Vec<u8> {
     v.extend_from_slice(&ts.ti_command());
     v.extend_from_slice(&ch);
     v.extend_from_slice(EXIT_REMOTE);
+    v.extend_from_slice(JOB_END_TRAILER);
     v
 }
 
@@ -185,45 +197,65 @@ mod tests {
     const TS: Timestamp = Timestamp { year: 2026, month: 11, day: 7, hour: 14, minute: 5, second: 9 };
 
     fn hex(s: &str) -> Vec<u8> {
-        s.split_whitespace().map(|h| u8::from_str_radix(h, 16).unwrap()).collect()
+        let s: String = s.split_whitespace().collect();
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
     }
 
-    /// `E_IHBRG5P` string 4300 without its length byte.
-    const EJL: &str = "00 00 00 1b 01 40 45 4a 4c 20 31 32 38 34 2e 34 0a 40 45 4a 4c 20 20 20 20 20 0a";
-    const REMOTE1: &str = "1b 28 52 08 00 00 52 45 4d 4f 54 45 31";
-    const TI: &str = "54 49 08 00 00 07 ea 0b 07 0e 05 09";
+    /// Golden vectors from the independent verifier (phase2/verify/golden.json).
+    /// They emulate RCDATA 1800/1802 plus trailer 4302 with the clock pinned
+    /// to 2025-01-02 03:04:05 (bytes 44..55).
+    const GOLDEN_TS: Timestamp = Timestamp { year: 2025, month: 1, day: 2, hour: 3, minute: 4, second: 5 };
+    const GOLDEN_NOZZLE_CHECK: &str = "0000001b0140454a4c20313238342e340a40454a4c20202020200a1b401b401b285208000052454d4f544531544908000007e901020304054a530400000000004e43020000001b0000000d0a0d0a1b285208000052454d4f5445315649020000004c4400001b0000000c1b401b401b285208000052454d4f5445314a450100001b000000";
+    const GOLDEN_HEAD_CLEANING: &str = "0000001b0140454a4c20313238342e340a40454a4c20202020200a1b401b401b285208000052454d4f544531544908000007e901020304054348020000001b0000001b401b401b285208000052454d4f5445314a450100001b000000";
+    const GOLDEN_POWER_CLEANING: &str = "0000001b0140454a4c20313238342e340a40454a4c20202020200a1b401b401b285208000052454d4f544531544908000007e901020304054348020000101b0000001b401b401b285208000052454d4f5445314a450100001b000000";
+
+    #[test]
+    fn nozzle_check_matches_golden() {
+        let job = nozzle_check_job(GOLDEN_TS);
+        assert_eq!(job.len(), 132);
+        assert_eq!(job, hex(GOLDEN_NOZZLE_CHECK));
+    }
+
+    #[test]
+    fn head_cleaning_matches_golden() {
+        let job = head_cleaning_job(Cleaning::Normal, GOLDEN_TS);
+        assert_eq!(job.len(), 92);
+        assert_eq!(job, hex(GOLDEN_HEAD_CLEANING));
+    }
+
+    #[test]
+    fn power_cleaning_matches_golden() {
+        let job = head_cleaning_job(Cleaning::Power, GOLDEN_TS);
+        assert_eq!(job.len(), 92);
+        assert_eq!(job[61], 0x10);
+        assert_eq!(job, hex(GOLDEN_POWER_CLEANING));
+    }
 
     #[test]
     fn exit_packet_mode_matches_string_4300() {
-        assert_eq!(EXIT_PACKET_MODE, hex(EJL).as_slice());
-        assert_eq!(EXIT_PACKET_MODE.len(), 0x1b);
+        let s4300 = hex("1B 00 00 00 1B 01 40 45 4A 4C 20 31 32 38 34 2E 34 0A 40 45 4A 4C 20 20 20 20 20 0A");
+        assert_eq!(s4300[0] as usize, EXIT_PACKET_MODE.len());
+        assert_eq!(EXIT_PACKET_MODE, &s4300[1..]);
+    }
+
+    #[test]
+    fn trailer_matches_string_4302() {
+        let s4302 = hex("1A 1B 40 1B 40 1B 28 52 08 00 00 52 45 4D 4F 54 45 31 4A 45 01 00 00 1B 00 00 00");
+        assert_eq!(s4302[0] as usize, JOB_END_TRAILER.len());
+        assert_eq!(JOB_END_TRAILER, &s4302[1..]);
     }
 
     #[test]
     fn ti_encodes_local_time_big_endian_year() {
-        assert_eq!(TS.ti_command().to_vec(), hex(TI));
+        assert_eq!(TS.ti_command().to_vec(), hex("54 49 08 00 00 07 ea 0b 07 0e 05 09"));
     }
 
     #[test]
-    fn nozzle_check_bytes() {
-        let want = hex(&format!(
-            "{EJL} 1b 40 1b 40 {REMOTE1} {TI} 4a 53 04 00 00 00 00 00 \
-             4e 43 02 00 00 00 1b 00 00 00 0d 0a 0d 0a \
-             {REMOTE1} 56 49 02 00 00 00 4c 44 00 00 1b 00 00 00 0c"
-        ));
-        assert_eq!(nozzle_check_job(TS), want);
-    }
-
-    #[test]
-    fn head_cleaning_bytes() {
-        let want = hex(&format!("{EJL} 1b 40 1b 40 {REMOTE1} {TI} 43 48 02 00 00 00 1b 00 00 00"));
-        assert_eq!(head_cleaning_job(Cleaning::Normal, TS), want);
-    }
-
-    #[test]
-    fn power_cleaning_bytes() {
-        let want = hex(&format!("{EJL} 1b 40 1b 40 {REMOTE1} {TI} 43 48 02 00 00 10 1b 00 00 00"));
-        assert_eq!(head_cleaning_job(Cleaning::Power, TS), want);
+    fn clock_only_changes_the_ti_bytes() {
+        let a = nozzle_check_job(GOLDEN_TS);
+        let b = nozzle_check_job(TS);
+        let differing: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+        assert!(differing.iter().all(|i| (49..=55).contains(i)), "{differing:?}");
     }
 
     #[test]
