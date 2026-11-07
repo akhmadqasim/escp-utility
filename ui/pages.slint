@@ -124,10 +124,12 @@ component InkBox inherits Group {
     in property <length> meter-x;
     in property <length> meter-y;
     title: "Approximate Ink Levels";
+    // More than six inks sit closer, with narrower boxes.
+    property <length> step: min(35px, (root.width - 2 * root.meter-x - 27px) / max(1, Prefs.inks.length - 1));
     for ink[i] in Prefs.inks: InkMeter {
-        x: root.meter-x + i * 35px;
+        x: root.meter-x + i * root.step;
         y: root.meter-y;
-        width: 27px;
+        width: min(27px, root.step - 4px);
         height: 54px;
         ink: ink;
     }

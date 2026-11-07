@@ -8,6 +8,7 @@ mod commands;
 mod layouts;
 mod printer;
 mod profile;
+mod report;
 mod settings;
 mod status;
 mod texts;
@@ -277,6 +278,8 @@ impl App {
         main.set_queue(printer.queue.clone().into());
         main.set_maintenance(printer.id.maintenance() || profiled);
         main.set_experimental(profile.experimental());
+        // Paper Guide Cleaning is the L800's (a no-op there, as on Windows).
+        main.set_paper_guide(profile.l800_windows());
         main.set_version_text(env!("CARGO_PKG_VERSION").into());
         Ok(Rc::new(App {
             mode,
@@ -579,6 +582,11 @@ impl App {
         });
     }
 
+    /// The Windows L800 text, or the neutral one for other printers.
+    fn text(&self, l800: &'static str, generic: &'static str) -> &'static str {
+        if self.profile.l800_windows() { l800 } else { generic }
+    }
+
     fn dry_run(&self) -> bool {
         matches!(self.mode, Mode::DryRun(_))
     }
@@ -616,7 +624,8 @@ impl App {
         };
         self.have_status.set(true);
         let cleaning = u.cleaning();
-        match status::precheck(&s, cleaning) {
+        let check = if self.profile.l800_windows() { status::precheck(&s, cleaning) } else { status::precheck_generic(&s, cleaning) };
+        match check {
             Precheck::Proceed => self.show_intro(u),
             // Dialog 270: strings 1127 + 1133.
             Precheck::Problem => self.show_message(u, "A problem has occurred.", SEE_DETAILS, true),
@@ -630,18 +639,24 @@ impl App {
             // Dialog 271: strings 1132 and 1131.
             Precheck::CleaningBlocked => self.show_message(u, "Head Cleaning can not be completed.", "", false),
             Precheck::NowCleaning => self.show_message(u, "Now cleaning!", "", false),
+            Precheck::InkOut => self.show_message(
+                u,
+                if cleaning { "Cannot complete Head Cleaning." } else { "Cannot complete Nozzle Check." },
+                INK_OUT,
+                false,
+            ),
         }
     }
 
     fn show_intro(&self, u: Utility) {
         match u {
             Utility::NozzleCheck => {
-                self.nozzle.set_body(NOZZLE_INTRO.into());
+                self.nozzle.set_body(self.text(NOZZLE_INTRO, NOZZLE_INTRO_GENERIC).into());
                 self.open(&self.nozzle);
             }
             // Dialog 220 with status, 226 without: same layout and text.
             Utility::HeadCleaning => {
-                self.cleaning.set_body(CLEAN_INTRO.into());
+                self.cleaning.set_body(self.text(CLEAN_INTRO, CLEAN_INTRO_GENERIC).into());
                 self.cleaning.set_kinds(strings(self.profile.cleaning.iter().map(|c| c.label.as_str())));
                 self.cleaning.set_kind(0);
                 self.open(&self.cleaning);
@@ -694,7 +709,9 @@ impl App {
         if self.cleaning_kind().confirms() {
             // FUN_004118dc shows dialog 360 when the selected value is not 0
             // and E_IHBRG5P string 5060 exists (it does on the L800).
-            self.power.set_body(POWER_CONFIRM.into());
+            self.power.set_body(self.text(POWER_CONFIRM, CONFIRM_GENERIC).into());
+            // The transportation lock is L800 hardware.
+            self.power.set_picture(self.profile.l800_windows());
             self.open(&self.power);
         } else {
             self.run_cleaning();
@@ -791,7 +808,7 @@ impl App {
             Step::Waiting | Step::Running => {}
             Step::Started(secs) => {
                 let at = Instant::now();
-                self.progress.set_body(CLEANING_NOW.into());
+                self.progress.set_body(self.text(CLEANING_NOW, CLEANING_NOW_GENERIC).into());
                 self.progress.set_bar_visible(true);
                 self.bar_timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
                     if let Some(app) = app() {
@@ -856,6 +873,7 @@ impl App {
 
     fn open_monitor(&self) {
         self.monitor.set_printer(self.printer.queue.clone().into());
+        self.monitor.set_note(self.text(status::INK_NOTE, status::GENERIC_INK_NOTE).into());
         self.monitor.set_title_text("Please wait...".into());
         self.monitor.set_body("".into());
         self.open(&self.monitor);
@@ -877,7 +895,12 @@ impl App {
     fn show_monitor_status(&self, res: QueryResult) {
         match res {
             Ok(s) => {
-                let (title, text) = status::message(&s);
+                let (title, text) = if self.profile.l800_windows() {
+                    let (title, text) = status::message(&s);
+                    (title.to_string(), text)
+                } else {
+                    status::message_generic(&s)
+                };
                 self.monitor.set_title_text(title.into());
                 self.monitor.set_body(text.into());
                 self.monitor.set_inks(slint::VecModel::from_slice(&ink_levels(&s)));
@@ -904,15 +927,6 @@ impl App {
         }
     }
 
-    /// The profile lines of Printer and Option Information.
-    fn profile_summary(&self) -> String {
-        let p = &self.profile;
-        let name = if self.profiled { format!("{} (Windows family \"{}\")", p.mdl, p.windows_family) } else { "generic".into() };
-        let tested = if p.experimental() { "Experimental: not yet tested on this model.".to_string() } else { format!("Tested: {}", p.tested) };
-        let cleaning: Vec<String> = p.cleaning.iter().map(|c| format!("{} (CH {:02X})", c.label, c.ch)).collect();
-        format!("Profile: {name}\n{tested}\nNozzle check: NC {:02X}; cleaning: {}\n", p.nc_param, cleaning.join(", "))
-    }
-
     fn show_printer_info(&self) {
         self.info.set_caption("Printer and Option Information".into());
         self.info.set_heading(
@@ -920,7 +934,7 @@ impl App {
         );
         // lpstat can be slow when cupsd is: keep it off the UI thread.
         let queue = self.printer.queue.clone();
-        let summary = format!("{}{}", self.printer.summary(), self.profile_summary());
+        let summary = format!("{}{}", self.printer.summary(), self.profile.summary(self.profiled));
         bg(move || format!("{summary}\n{}", transport::queue_info(&queue)), |app, text| {
             app.info.set_content(text.into());
             app.open(&app.info);
@@ -933,22 +947,32 @@ fn ink_levels(s: &Status) -> Vec<InkLevel> {
     s.inks
         .iter()
         .map(|i| InkLevel {
-            name: status::ink_name(i.color).into(),
+            name: status::ink_name(i).into(),
             color: ink_color(i.color),
             level: i.percent().map_or(-1, i32::from),
         })
         .collect()
 }
 
-/// Bar colour for each ink (colour code from field 0x0F).
+/// Bar colour for each ink (colour code from field 0x0F, see `status::ink_name`).
 fn ink_color(code: u8) -> slint::Color {
     let rgb = match code {
-        0 => 0x202020,
-        1 => 0x00a0e0,
-        2 => 0xd0168c,
-        3 => 0xf0c800,
-        4 => 0x7fd0f0,
-        5 => 0xf08cc8,
+        0x00 => 0x202020,
+        0x01 => 0x00a0e0,
+        0x02 => 0xd0168c,
+        0x03 => 0xf0c800,
+        0x04 => 0x7fd0f0,
+        0x05 => 0xf08cc8,
+        0x06 => 0xfff0a0,
+        0x07 => 0xc8a000,
+        0x08 => 0x707070,
+        0x09 => 0xe02020,
+        0x0A => 0x7030c0,
+        0x0B => 0xe8e8e8,
+        0x0C => 0xa8a8a8,
+        0x0D => 0xf08020,
+        0x0E => 0x20a040,
+        0x0F => 0xffffff,
         _ => 0x808080,
     };
     slint::Color::from_argb_encoded(0xff00_0000 | rgb)
@@ -984,9 +1008,12 @@ struct Args {
     utility: bool,
     /// --profile: more profiles, before the built-in ones.
     profile: Option<PathBuf>,
+    /// --report: print the report for a new profile and exit.
+    report: bool,
 }
 
 const USAGE: &str = "Usage: epson-l800-utility [--utility] [--dry-run] [--dump-dir DIR] [--queue NAME] [--profile FILE]
+       epson-l800-utility --report [--queue NAME] [--profile FILE]
 
   --utility       open on the Maintenance tab (default: Main)
   --dry-run       write each job to a file and show a hexdump; never calls lp,
@@ -996,6 +1023,9 @@ const USAGE: &str = "Usage: epson-l800-utility [--utility] [--dry-run] [--dump-d
                   with several, a list to choose from)
   --profile FILE  maintenance profiles in the profiles.toml format; they
                   come before the built-in ones (to try a new model)
+  --report        print what a new profile needs (identity, PPD NickName,
+                  lpoptions -l, one status reply with the serial masked);
+                  reads the printer status once, sends no job
 ";
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -1004,11 +1034,13 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut dir = None;
     let mut utility = false;
     let mut profile = None;
+    let mut report = false;
     let mut it = args;
     while let Some(a) = it.next() {
         match a.as_str() {
             "--dry-run" => dry = true,
             "--utility" => utility = true,
+            "--report" => report = true,
             "--dump-dir" => dir = Some(PathBuf::from(it.next().ok_or("--dump-dir needs a value")?)),
             "--queue" => queue = Some(it.next().ok_or("--queue needs a value")?),
             "--profile" => profile = Some(PathBuf::from(it.next().ok_or("--profile needs a value")?)),
@@ -1026,7 +1058,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     if dir.is_some() && !dry {
         return Err("--dump-dir needs --dry-run".into());
     }
-    Ok(Args { queue, dump_dir: dry.then(|| dir.unwrap_or_else(transport::default_dump_dir)), utility, profile })
+    Ok(Args { queue, dump_dir: dry.then(|| dir.unwrap_or_else(transport::default_dump_dir)), utility, profile, report })
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -1048,6 +1080,21 @@ fn main() -> Result<(), slint::PlatformError> {
         },
     };
     profiles.extend(profile::builtin());
+    if args.report {
+        let queue = match args.queue {
+            Some(q) => q,
+            None => match printer::epson_queues().as_slice() {
+                [(q, _)] => q.name.clone(),
+                qs => {
+                    let names: Vec<&str> = qs.iter().map(|(q, _)| q.name.as_str()).collect();
+                    eprintln!("--report needs --queue NAME (Epson queues: {})", names.join(", "));
+                    std::process::exit(2);
+                }
+            },
+        };
+        print!("{}", report::run(&queue, &profiles));
+        return Ok(());
+    }
     // The Wayland app_id (X11 WM_CLASS) of every window: GNOME matches it to
     // epson-l800-utility.desktop (StartupWMClass), so the sheet and its
     // dialogs group as one app with our icon. Must be set before any window
@@ -1438,5 +1485,8 @@ mod tests {
         assert_eq!(a.queue.as_deref(), Some("Q"));
         assert!(args(&["--dump-dir", "/tmp/x"]).is_err());
         assert!(args(&["--bogus"]).is_err());
+        let a = args(&["--report", "--profile", "p.toml"]).unwrap();
+        assert!(a.report);
+        assert_eq!(a.profile, Some(PathBuf::from("p.toml")));
     }
 }

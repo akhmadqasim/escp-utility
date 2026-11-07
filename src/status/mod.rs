@@ -95,6 +95,12 @@ pub fn exclusive() -> std::sync::MutexGuard<'static, ()> {
 /// touches the printer while CUPS has jobs. Queries are serialised through
 /// [`exclusive`].
 pub fn query(queue: &str, node: Option<&Path>) -> Result<Status, QueryError> {
+    let raw = query_raw(queue, node)?;
+    Status::from_reply(&raw).ok_or_else(|| QueryError::Failed("reply is not a complete @BDC ST2".into()))
+}
+
+/// The reply bytes of one status query (see [`query`]).
+pub fn query_raw(queue: &str, node: Option<&Path>) -> Result<Vec<u8>, QueryError> {
     let _guard = exclusive();
     let fail = QueryError::Failed;
     if jobs_queued(queue).map_err(fail)? {
@@ -102,8 +108,7 @@ pub fn query(queue: &str, node: Option<&Path>) -> Result<Status, QueryError> {
     }
     let path = node.ok_or_else(|| fail("no /dev/usb/lp* with a status channel for this printer".into()))?;
     let port = usblp::UsbLp::open(path).map_err(|e| fail(format!("{}: {e}", path.display())))?;
-    let raw = d4::Session::new(port).query().map_err(|e| fail(e.to_string()))?;
-    Status::from_reply(&raw).ok_or_else(|| fail("reply is not a complete @BDC ST2".into()))
+    d4::Session::new(port).query().map_err(|e| fail(e.to_string()))
 }
 
 /// Result of the Windows pre-check (E_IHUTG5P `FUN_00419768` + `FUN_0041a2f8`).
@@ -118,6 +123,8 @@ pub enum Precheck {
     CleaningBlocked,
     /// Dialog 271: "Now cleaning!"
     NowCleaning,
+    /// Dialog 271: an ink is used up (generic pre-check only).
+    InkOut,
 }
 
 pub fn precheck(s: &Status, cleaning: bool) -> Precheck {
@@ -141,18 +148,89 @@ pub fn precheck(s: &Status, cleaning: bool) -> Precheck {
     Precheck::Proceed
 }
 
-/// Ink names, E_IASRG5P strings 4150-4155, by colour code.
-pub fn ink_name(color: u8) -> &'static str {
-    match color {
-        0 => "Black",
-        1 => "Cyan",
-        2 => "Magenta",
-        3 => "Yellow",
-        4 => "Light Cyan",
-        5 => "Light Magenta",
+/// The pre-check for printers without the Windows L800 tables, as Epson's
+/// Linux utility gates its buttons (`updateCurrenInkJetPrinterStaus`,
+/// rea/MULTI-MODEL.md §1.2) plus escpr's cleaning warning: ST 00 or 01
+/// stops both; an ink at 0 stops both; an ink at 1-4 %, or a warning
+/// 0x51-0x5A (`EPS_PRNWARN_DISABLE_CLEAN`), stops cleaning; ST 07 is
+/// "Now cleaning!".
+pub fn precheck_generic(s: &Status, cleaning: bool) -> Precheck {
+    match s.st {
+        Some(0x00) => return Precheck::Problem,
+        Some(0x01) => return Precheck::CannotComplete,
+        _ => {}
+    }
+    if s.inks.iter().any(|i| i.percent() == Some(0)) {
+        return Precheck::InkOut;
+    }
+    let low = s.inks.iter().any(|i| matches!(i.percent(), Some(1..=4)));
+    if cleaning && (low || s.warnings.iter().any(|w| (0x51..=0x5A).contains(w))) {
+        return Precheck::CleaningBlocked;
+    }
+    if cleaning && s.st == Some(0x07) {
+        return Precheck::NowCleaning;
+    }
+    Precheck::Proceed
+}
+
+/// Ink names by colour code (field 0x0F, escpr `parseCartridge`); codes
+/// 0-5 are E_IASRG5P strings 4150-4155. Cartridge type 0x0B is matte black.
+pub fn ink_name(ink: &Ink) -> &'static str {
+    if ink.ink_id == 0x0B {
+        return "Matte Black";
+    }
+    match ink.color {
+        0x00 => "Black",
+        0x01 => "Cyan",
+        0x02 => "Magenta",
+        0x03 => "Yellow",
+        0x04 => "Light Cyan",
+        0x05 => "Light Magenta",
+        0x06 => "Light Yellow",
+        0x07 => "Dark Yellow",
+        0x08 => "Light Black",
+        0x09 => "Red",
+        0x0A => "Violet",
+        0x0B => "Clear",
+        0x0C => "Light Light Black",
+        0x0D => "Orange",
+        0x0E => "Green",
+        0x0F => "White",
+        0x40 => "Composite",
         _ => "Ink",
     }
 }
+
+/// Status Monitor 3 message for printers without the Windows L800 tables:
+/// neutral texts for the generic ST2 meanings (escpr `serAnalyzeStatus`).
+/// Error codes mean different things on different models (A3 and egID
+/// overrides there), so they are shown as numbers.
+pub fn message_generic(s: &Status) -> (String, String) {
+    let t = |a: &str, b: &str| (a.to_string(), b.to_string());
+    match s.st {
+        Some(0x00) => {
+            let title = s.er.map_or("Printer error".to_string(), |er| format!("Printer error (code {er:02X})"));
+            return (title, GENERIC_ERROR.to_string());
+        }
+        Some(0x08) => return t("Initial setup", "The printer's initial setup has not finished. Complete it on the printer."),
+        Some(0x0A) => return t("Printer is shutting down", "Please wait."),
+        _ => {}
+    }
+    if s.warnings.iter().any(|w| matches!(w, 0x10..=0x1A | 0x71..=0x7A)) {
+        return t("Ink low", &format!("{}You can keep printing, but get new ink ready soon. {GENERIC_INK_NOTE}", low_inks(s)));
+    }
+    match s.st {
+        Some(0x01..=0x03) | Some(0x0D) => t("Printing", "Please wait."),
+        Some(0x04) => t("Ready", "Ready to print."),
+        Some(0x07) => t("Cleaning", "The printer is cleaning the print head. Please wait."),
+        Some(st) => (format!("Printer error (status {st:02X})"), GENERIC_ERROR.to_string()),
+        None => t("Communication error", COMM),
+    }
+}
+
+const GENERIC_ERROR: &str = "Look at the printer's display or lights. If the error stays, switch the printer off and on again.";
+/// Without the "ink tanks" sentence of [`INK_NOTE`].
+pub const GENERIC_INK_NOTE: &str = "The ink levels shown are estimates and can differ from the real levels.";
 
 /// Status Monitor 3 message: (title, text). Matched in the order of the
 /// Windows table `GetStatusCode` (E_IABRG5P DAT_1800027e0, 33 rows of
@@ -221,9 +299,9 @@ fn low_inks(s: &Status) -> String {
     let names: Vec<&str> = s
         .warnings
         .iter()
-        .filter(|&&w| matches!(w, 0x10..=0x15 | 0x71..=0x76))
-        .filter_map(|&w| s.inks.get((w & 0x0F) as usize - usize::from(w >= 0x71)))
-        .map(|i| ink_name(i.color))
+        .filter(|&&w| matches!(w, 0x10..=0x1A | 0x71..=0x7A))
+        .filter_map(|&w| s.inks.get(((w & 0x0F) as usize).checked_sub(usize::from(w >= 0x71))?))
+        .map(ink_name)
         .collect();
     if names.is_empty() { String::new() } else { format!("{}: ", names.join(", ")) }
 }
@@ -315,6 +393,8 @@ mod tests {
         assert_eq!(s.st, Some(0x04));
         assert_eq!(s.warnings, vec![0x74]);
         assert_eq!(s.inks.len(), 6);
+        let names: Vec<&str> = s.inks.iter().map(ink_name).collect();
+        assert_eq!(names, ["Cyan", "Magenta", "Light Magenta", "Light Cyan", "Black", "Yellow"]);
         let (title, text) = message(&s);
         assert_eq!(title, "Ink low");
         assert!(text.starts_with("Light Cyan: "), "{text}");
@@ -352,6 +432,71 @@ mod tests {
         // A 0x4x warning outranks 0x1x and has no row: Windows shows the ST row.
         assert_eq!(message(&Status { warnings: vec![0x12, 0x41], ..st(4) }).0, "Ready");
         assert_eq!(message(&Status { warnings: vec![0x51, 0x74], ..st(4) }).0, "Ink low");
+    }
+
+    /// A synthetic ST2 reply: ST, optional ER, warnings, and inks given as
+    /// (cartridge type, colour, level) in 3-byte entries.
+    fn synthetic(st_byte: u8, er: Option<u8>, wr: &[u8], inks: &[(u8, u8, u8)]) -> Status {
+        let mut extra = vec![];
+        if let Some(er) = er {
+            extra.extend([0x02, 0x01, er]);
+        }
+        extra.extend([0x04, wr.len() as u8]);
+        extra.extend(wr);
+        extra.extend([0x0F, 1 + 3 * inks.len() as u8, 3]);
+        for &(t, c, l) in inks {
+            extra.extend([t, c, l]);
+        }
+        Status::from_reply(&st2::tests::sample(st_byte, &extra)).unwrap()
+    }
+
+    #[test]
+    fn generic_nine_inks() {
+        let inks = [(0x0B, 0x00, 50), (0x01, 0x00, 60), (0, 1, 70), (0, 2, 3), (0, 3, 80), (0, 4, 90), (0, 5, 55), (0, 8, 40), (0, 0x0C, 30)];
+        let s = synthetic(0x04, None, &[], &inks);
+        let names: Vec<&str> = s.inks.iter().map(ink_name).collect();
+        assert_eq!(
+            names,
+            ["Matte Black", "Black", "Cyan", "Magenta", "Yellow", "Light Cyan", "Light Magenta", "Light Black", "Light Light Black"]
+        );
+        assert_eq!(message_generic(&s).0, "Ready");
+        // Magenta at 3 %: cleaning off, nozzle check on.
+        assert_eq!(precheck_generic(&s, true), Precheck::CleaningBlocked);
+        assert_eq!(precheck_generic(&s, false), Precheck::Proceed);
+        let s = synthetic(0x04, None, &[0x12], &inks);
+        assert_eq!(message_generic(&s), ("Ink low".into(), format!("Cyan: You can keep printing, but get new ink ready soon. {GENERIC_INK_NOTE}")));
+    }
+
+    #[test]
+    fn generic_prechecks() {
+        let ok = [(0, 0, 50), (0, 1, 60)];
+        assert_eq!(precheck_generic(&synthetic(0x00, Some(0x04), &[], &ok), false), Precheck::Problem);
+        assert_eq!(precheck_generic(&synthetic(0x01, None, &[], &ok), false), Precheck::CannotComplete);
+        let out = synthetic(0x04, None, &[], &[(0, 0, 0), (0, 1, 60)]);
+        assert_eq!(precheck_generic(&out, false), Precheck::InkOut);
+        assert_eq!(precheck_generic(&out, true), Precheck::InkOut);
+        let wr = synthetic(0x04, None, &[0x55], &ok);
+        assert_eq!(precheck_generic(&wr, true), Precheck::CleaningBlocked);
+        assert_eq!(precheck_generic(&wr, false), Precheck::Proceed);
+        assert_eq!(precheck_generic(&synthetic(0x07, None, &[], &ok), true), Precheck::NowCleaning);
+        assert_eq!(precheck_generic(&synthetic(0x07, None, &[], &ok), false), Precheck::Proceed);
+        assert_eq!(precheck_generic(&synthetic(0x04, None, &[], &ok), true), Precheck::Proceed);
+    }
+
+    #[test]
+    fn generic_messages() {
+        let ok = [(0, 0, 50)];
+        assert_eq!(message_generic(&synthetic(0x00, Some(0x6A), &[], &ok)).0, "Printer error (code 6A)");
+        assert_eq!(message_generic(&synthetic(0x00, None, &[], &ok)).0, "Printer error");
+        assert_eq!(message_generic(&synthetic(0x07, None, &[], &ok)).0, "Cleaning");
+        assert_eq!(message_generic(&synthetic(0x02, None, &[], &ok)).0, "Printing");
+        assert_eq!(message_generic(&synthetic(0x0A, None, &[], &ok)).0, "Printer is shutting down");
+        assert_eq!(message_generic(&synthetic(0x0E, None, &[], &ok)).0, "Printer error (status 0E)");
+        // The L800 live reply: the same "Ink low" for Light Cyan, neutral wording.
+        let s = Status::from_reply(&st2::tests::live()).unwrap();
+        let (title, text) = message_generic(&s);
+        assert_eq!(title, "Ink low");
+        assert!(text.starts_with("Light Cyan: "), "{text}");
     }
 
     fn cleaning(secs: Option<u16>) -> Result<Status, QueryError> {

@@ -274,6 +274,23 @@ fn main() {
     d.set_inks(slint::VecModel::from_slice(&inks));
     render(&p, "status-monitor", &d, &out);
 
+    // A generic printer with nine inks (synthetic levels).
+    let d = StatusMonitorDialog::new().unwrap();
+    d.set_title_text("Ink low".into());
+    d.set_body("Light Black: You can keep printing, but get new ink ready soon. The ink levels shown are estimates and can differ from the real levels.".into());
+    d.set_note("The ink levels shown are estimates and can differ from the real levels.".into());
+    let nine: Vec<InkLevel> = [("Matte Black", 0x202020, 50), ("Black", 0x202020, 60), ("Cyan", 0x00a0e0, 70), ("Magenta", 0xd0168c, 3), ("Yellow", 0xf0c800, 80), ("Light Cyan", 0x7fd0f0, 90), ("Light Magenta", 0xf08cc8, 55), ("Light Black", 0x707070, 8), ("Light Light Black", 0xa8a8a8, 30)]
+        .iter()
+        .map(|&(n, c, l)| InkLevel { name: n.into(), color: slint::Color::from_argb_encoded(0xff00_0000 | c), level: l })
+        .collect();
+    d.set_inks(slint::VecModel::from_slice(&nine));
+    render(&p, "status-monitor-generic", &d, &out);
+
+    let d = PowerCleaningDialog::new().unwrap();
+    d.set_body(CONFIRM_GENERIC.into());
+    d.set_picture(false);
+    render(&p, "confirm-generic", &d, &out);
+
     let d = ChooserDialog::new().unwrap();
     let queues = ["L800  (Epson L800 Series - epson-inkjet-printer 1.0.2-1)", "ET-2750  (Epson ET-2750 Series, driverless)"];
     d.set_queues(slint::VecModel::from_slice(&queues.map(slint::SharedString::from)));

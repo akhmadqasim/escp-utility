@@ -22,3 +22,12 @@ pub const PAPER_GUIDE: &str = "Plain paper is used to clean the inside of the pr
 /// Meaning of E_IHSRG5P 1133.
 pub const SEE_DETAILS: &str = "Click [Details] to see more.";
 pub const DRY_RUN_NOTE: &str = "Dry run: no job was sent to the printer.\n\n";
+
+// Neutral variants for printers without the Windows L800 texts (profile
+// windows_family other than "G5P"): no CD/DVD tray, no Power Cleaning.
+
+pub const NOZZLE_INTRO_GENERIC: &str = "Before you print the nozzle check pattern, make sure the printer is switched on and connected to this computer, and load A4 or Letter plain paper.\n\nClick [Print] to print the pattern, or [Cancel] to close.";
+pub const CLEAN_INTRO_GENERIC: &str = "Click [Start] to clean the print head nozzles.\n\nCleaning uses ink, so clean only when printouts show faint areas or gaps. Run a Nozzle Check first to see whether cleaning is needed.";
+pub const CONFIRM_GENERIC: &str = "Do you really want to run this cleaning? It uses more ink than a normal cleaning.";
+pub const CLEANING_NOW_GENERIC: &str = "The print head is being cleaned.\nPlease wait.";
+pub const INK_OUT: &str = "An ink is used up. Refill or replace it first.";

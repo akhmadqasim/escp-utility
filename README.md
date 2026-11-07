@@ -260,6 +260,29 @@ with CH 00, which is what Epson's Linux utility sends to every model.
   built-in ones, to try a model.
 - Only measured values belong here; CH 20, alignment, paper guide cleaning
   and `ri` are not in the schema.
+- To add a model, run `epson-l800-utility --report [--queue NAME]` and
+  send its output. It prints the identity, the PPD NickName,
+  `lpoptions -p QUEUE -l` and one status reply as hex with the serial
+  number masked (also in the URI). It reads the status once, under the
+  usual rules, and sends no job. Then a dry run's dump is compared with the
+  evidence (driver RCDATA or a usbmon capture of the Windows utility in a
+  VM), and the jobs are run on the printer with `--profile FILE`.
+
+**Other printers (family not "G5P").** The Windows L800 data stays the
+L800's. Everything else uses the generic data, from what Epson's Linux
+utility and escpr do for every model (rea/MULTI-MODEL.md §1.2, §3):
+- Pre-check: ST 00 gives "A problem has occurred", ST 01 "Cannot
+  complete"; an ink at 0 % stops both utilities; an ink at 1-4 % or a
+  warning 0x51-0x5A stops Head Cleaning; ST 07 gives "Now cleaning!".
+- Status Monitor 3: neutral texts (Ready, Printing, Cleaning, Ink low for
+  warnings 0x10-0x1A and 0x71-0x7A, shutting down, initial setup). Error
+  codes mean different things on different models, so an error shows as
+  "Printer error (code NN)".
+- Inks: as many meters as the reply lists, named and coloured by the
+  escpr colour codes (cartridge type 0x0B is Matte Black). Six inks keep
+  the L800 positions; more sit closer.
+- The dialog texts leave out the L800's CD/DVD tray and transportation
+  lock. Paper Guide Cleaning (a no-op on the L800) is disabled.
 
 ## Status
 
@@ -334,6 +357,8 @@ Options:
                 with several, a list to choose from)
 --profile FILE  maintenance profiles in the profiles.toml format, used
                 before the built-in ones
+--report        print what a new profile needs (identity, PPD NickName,
+                lpoptions -l, one status reply with the serial masked)
 ```
 
 No `-dev` packages are needed. fontconfig is loaded at run time
@@ -473,6 +498,7 @@ Errors:         queue paused / not accepting / lp failed --> 271;  ST=00 before 
 - `src/commands.rs`: job bytes, with evidence comments and golden-vector tests
   (`tests/golden/`)
 - `profiles.toml`, `src/profile.rs`: per-model maintenance data and its lint
+- `src/report.rs`: `--report`
 - `src/printer.rs`: Epson queues, IEEE 1284 device ID, maintenance and status gates
 - `src/transport.rs`: `lp -o raw`, dry-run files, CUPS queue check and info
 - `src/status/`: 1284.4 session (`d4.rs`), usblp port (`usblp.rs`), ST2 parser

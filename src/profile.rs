@@ -48,6 +48,20 @@ impl Profile {
     pub fn experimental(&self) -> bool {
         self.tested.is_empty()
     }
+
+    /// The profile lines of Printer and Option Information and `--report`.
+    /// `profiled`: it matched the printer (else it is the generic one).
+    pub fn summary(&self, profiled: bool) -> String {
+        let name = if profiled { format!("{} (Windows family \"{}\")", self.mdl, self.windows_family) } else { "generic".into() };
+        let tested = if self.experimental() { "Experimental: not yet tested on this model.".to_string() } else { format!("Tested: {}", self.tested) };
+        let cleaning: Vec<String> = self.cleaning.iter().map(|c| format!("{} (CH {:02X})", c.label, c.ch)).collect();
+        format!("Profile: {name}\n{tested}\nNozzle check: NC {:02X}; cleaning: {}\n", self.nc_param, cleaning.join(", "))
+    }
+
+    /// The Windows L800 texts and status tables apply.
+    pub fn l800_windows(&self) -> bool {
+        self.windows_family == "G5P"
+    }
 }
 
 #[derive(Deserialize)]
@@ -104,7 +118,8 @@ mod tests {
         assert_eq!(l800.cleaning.iter().map(|c| c.ch).collect::<Vec<_>>(), vec![0x00, 0x10]);
         assert!(!l800.cleaning[0].confirms());
         assert!(l800.cleaning[1].confirms());
-        assert_eq!(l800.windows_family, "G5P");
+        assert!(l800.l800_windows());
+        assert!(!Profile::generic().l800_windows());
         assert_eq!(find(&p, Some("L800 Series")), None);
         assert!(lint(&[Profile::generic()]).is_err(), "generic has no mdl");
     }

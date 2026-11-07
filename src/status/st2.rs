@@ -19,6 +19,7 @@ pub mod id {
     pub const WR: u8 = 0x04; // warning codes
     pub const TC: u8 = 0x0C; // cleaning time in seconds, u16 LE
     pub const IC: u8 = 0x0F; // ink levels
+    pub const SN: u8 = 0x1F; // serial number
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +75,22 @@ pub fn parse(buf: &[u8]) -> Option<Reply> {
         i += 2 + len;
     }
     Some(Reply { declared_len, available_len: payload.len(), truncated, fields })
+}
+
+/// Overwrite the serial number (field 0x1F) with 'X', for reports.
+pub fn mask_serial(buf: &mut [u8]) {
+    let Some(offset) = buf.windows(HEADER.len()).position(|w| w == HEADER) else { return };
+    let Some(len) = buf.get(offset + 10..offset + 12) else { return };
+    let stop = (offset + 12 + u16::from_le_bytes([len[0], len[1]]) as usize).min(buf.len());
+    let mut i = offset + 12;
+    while i + 2 <= stop {
+        let (fid, len) = (buf[i], buf[i + 1] as usize);
+        let end = (i + 2 + len).min(stop);
+        if fid == id::SN {
+            buf[i + 2..end].fill(b'X');
+        }
+        i = end;
+    }
 }
 
 /// One entry of field 0x0F.
@@ -163,6 +180,17 @@ pub(crate) mod tests {
     fn rejects_non_st2() {
         assert_eq!(parse(b"@BDC ST\r\nST:04;"), None);
         assert_eq!(parse(b"@BDC ST2\r\n\x01"), None);
+    }
+
+    #[test]
+    fn serial_is_masked() {
+        // The live reply's serial is masked already; put one in and mask it.
+        let mut raw = live();
+        let at = raw.windows(2).position(|w| w == [id::SN, 0x0A]).unwrap() + 2;
+        raw[at..at + 10].copy_from_slice(b"S3RIAL0123");
+        assert_ne!(raw, live());
+        mask_serial(&mut raw);
+        assert_eq!(raw, live());
     }
 
     #[test]

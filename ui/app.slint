@@ -46,6 +46,8 @@ component MaintenancePage inherits Rectangle {
     in property <bool> maintenance: true;
     // Its profile has no `tested` entry (profiles.toml).
     in property <bool> experimental;
+    // Paper Guide Cleaning: the L800's only (profile windows_family G5P).
+    in property <bool> paper-guide: true;
     callback utility-clicked(string);
     callback driver-update();
     width: 443px;
@@ -90,6 +92,10 @@ component MaintenancePage inherits Rectangle {
     // information work for any printer.
     pure function row-enabled(u: UtilityRow) -> bool {
         u.enabled && (root.maintenance || u.id == "status-monitor" || u.id == "printer-info")
+            && (root.paper-guide || u.id != "paper-guide-cleaning")
+    }
+    pure function row-tip(u: UtilityRow) -> string {
+        root.row-enabled(u) ? "" : !u.enabled ? u.tip : !root.maintenance ? Strings.no-escp : Strings.paper-guide-off
     }
 
     for u in root.utilities: Rectangle {
@@ -101,7 +107,7 @@ component MaintenancePage inherits Rectangle {
             height: 42px;
             icon: u.icon;
             enabled: root.row-enabled(u);
-            tip: root.row-enabled(u) ? "" : u.enabled ? Strings.no-escp : u.tip;
+            tip: root.row-tip(u);
             clicked => { root.utility-clicked(u.id); }
         }
         // 3900-3905 LTEXT (77,6+38n, 200x8 DLU)
@@ -196,6 +202,7 @@ export component MainWindow inherits FramedWindow {
     in property <string> version-text;
     in property <bool> maintenance: true;
     in property <bool> experimental;
+    in property <bool> paper-guide: true;
     in-out property <int> current-tab: 1;
     // A utility dialog is open: like Windows' modal dialogs, ignore clicks here.
     in property <bool> busy;
@@ -239,6 +246,7 @@ export component MainWindow inherits FramedWindow {
                 version-text: root.version-text;
                 maintenance: root.maintenance;
                 experimental: root.experimental;
+                paper-guide: root.paper-guide;
                 utility-clicked(id) => { root.utility-clicked(id); }
                 driver-update => { root.driver-update(); }
             }
@@ -459,11 +467,13 @@ export component HeadCleaningDialog inherits UtilityWindow {
 // lock, 501 "Cancel" (back to step 1), 500 "OK" (default).
 export component PowerCleaningDialog inherits UtilityWindow {
     in property <string> body;
+    // The L800 transportation lock (other printers: no picture).
+    in property <bool> picture: true;
     callback ok();
     callback cancel();
     // 585 (8,y,419x124) under the text; the 160x120 picture centred in it.
     property <length> picture-y: max(40px, t.y + t.height) + 12px;
-    property <length> buttons-y: root.picture-y + 124px + 16px;
+    property <length> buttons-y: root.picture ? root.picture-y + 124px + 16px : root.picture-y + 4px;
     title: "Head Cleaning";
     width: 435px;
     client-height: root.buttons-y + 31px;
@@ -472,7 +482,7 @@ export component PowerCleaningDialog inherits UtilityWindow {
     DlgIcon { x: 8px; y: 8px; source: @image-url("icons/head-cleaning.svg"); }
     t := DlgText { x: 48px; y: 10px; width: 379px; height: self.preferred-height; text: root.body; }
     // Our picture and its two labels stay inside the 160x120 bitmap box, like Windows.
-    Rectangle {
+    if root.picture: Rectangle {
         x: 137px; y: root.picture-y + 2px; width: 160px; height: 120px;
         Image { width: 100%; height: 100%; source: @image-url("icons/transport-lock.svg"); }
         Text { x: 100px; y: 2px; width: 60px; text: "Printing"; font-size: 10px; color: #3a7bd5; horizontal-alignment: right; }
@@ -710,15 +720,21 @@ export component StatusMonitorDialog inherits UtilityWindow {
     Rectangle { x: 14px; y: 139px; width: 130px; height: 14px; background: #ffffff;
         DlgText { x: 3px; text: "Approximate Ink Levels"; wrap: no-wrap; }
     }
-    // Meters 390-395 (45x68) and names 2700-2705 6 px under them.
+    // Meters 390-395 (45x68) and names 2700-2705 6 px under them: the six
+    // L800 meters at x 33, 107, 180, 254, 327, 401, centred in the group
+    // 73.6 px apart; more inks sit closer, with narrower and shorter meters
+    // (their names then take two lines).
+    property <length> ink-step: min(73.6px, 410px / max(1, root.inks.length - 1));
+    property <length> meter-h: root.ink-step < 72px ? 56px : 68px;
     for ink[n] in root.inks: Rectangle {
-        property <[length]> xs: [33px, 107px, 180px, 254px, 327px, 401px];
-        x: self.xs[n] - 13px;
+        property <length> meter-w: min(45px, root.ink-step - 4px);
+        // The meter's centre is the group's (x 239.5) plus the offset.
+        x: 204px + Math.round((n - (root.inks.length - 1) / 2) * root.ink-step / 1px) * 1px;
         y: 159px;
         width: 72px;
         height: 100px;
-        InkMeter { x: 13px; y: 0; width: 45px; height: 68px; ink: ink; }
-        DlgText { x: 0; y: 74px; width: 72px; height: 26px; text: ink.name; horizontal-alignment: center; }
+        InkMeter { x: Math.floor((72px - parent.meter-w) / 2px) * 1px; y: 0; width: parent.meter-w; height: root.meter-h; ink: ink; }
+        DlgText { x: (72px - min(72px, root.ink-step)) / 2; y: root.meter-h + 6px; width: min(72px, root.ink-step); height: 26px; text: ink.name; horizontal-alignment: center; }
     }
     // 30601 note, 8 px above the group bottom.
     DlgText { x: 16px; y: 254px; width: 447px; height: 26px; text: root.note; }

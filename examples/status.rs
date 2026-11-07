@@ -23,11 +23,14 @@ fn main() {
             println!("query took {:?}", started.elapsed());
             println!("ST={:02X?} ER={:02X?} TP={} WR={:02X?} TC={:?}", s.st, s.er, s.tp, s.warnings, s.cleaning_secs);
             for i in &s.inks {
-                println!("  {:<13} {}", status::ink_name(i.color), i.percent().map_or("?".into(), |p| format!("{p}%")));
+                println!("  {:<13} {}", status::ink_name(i), i.percent().map_or("?".into(), |p| format!("{p}%")));
             }
-            println!("Status Monitor: {title}: {text}");
+            println!("Status Monitor (L800 tables): {title}: {text}");
+            let (title, text) = status::message_generic(&s);
+            println!("Status Monitor (generic): {title}: {text}");
             println!("Pre-check (nozzle): {:?}", status::precheck(&s, false));
             println!("Pre-check (cleaning): {:?}", status::precheck(&s, true));
+            println!("Generic pre-check (nozzle, cleaning): {:?}, {:?}", status::precheck_generic(&s, false), status::precheck_generic(&s, true));
         }
         Err(e) => {
             eprintln!("no status: {e:?}");
