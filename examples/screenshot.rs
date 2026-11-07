@@ -80,6 +80,34 @@ fn main() {
 
     let d = WaitDialog::new().unwrap();
     render(p, "wait-201", (240, 65), || d.show(), &out);
+
+    let d = ProgressDialog::new().unwrap();
+    d.set_body("The print head is being cleaned.\nPlease wait.\nCaution: keep the CD/DVD tray out until cleaning has finished.".into());
+    d.set_bar_visible(true);
+    d.set_value(0.45);
+    render(p, "progress-223", (420, 335), || d.show(), &out);
+
+    let d = CleaningDoneDialog::new().unwrap();
+    d.set_body("The cleaning cycle has finished.\n\nTo check that it worked, click [Print Nozzle Check Pattern].".into());
+    render(p, "cleaning-done-224", (420, 335), || d.show(), &out);
+
+    let d = MessageDialog::new().unwrap();
+    d.set_utility("Head Cleaning".into());
+    d.set_heading("A problem has occurred.".into());
+    d.set_body("Click [Details] to see more.".into());
+    d.set_show_details(true);
+    render(p, "problem-270", (371, 197), || d.show(), &out);
+
+    // Values of the live L800 reply in src/status/l800_st2_live_masked.hex.
+    let d = StatusMonitorDialog::new().unwrap();
+    d.set_title_text("Ink low".into());
+    d.set_body("Light Cyan: You can keep printing. Refill the ink tank soon. The ink levels shown are estimates and can differ from the real levels. To be sure, look at the ink tanks on the printer.".into());
+    let inks: Vec<InkLevel> = [("Cyan", 0x00a0e0, 47), ("Magenta", 0xd0168c, 37), ("Light Magenta", 0xf08cc8, 18), ("Light Cyan", 0x7fd0f0, 3), ("Black", 0x202020, 81), ("Yellow", 0xf0c800, 27)]
+        .iter()
+        .map(|&(n, c, l)| InkLevel { name: n.into(), color: slint::Color::from_argb_encoded(0xff00_0000 | c), level: l })
+        .collect();
+    d.set_inks(Rc::new(slint::VecModel::from(inks)).into());
+    render(p, "status-monitor", (479, 412), || d.show(), &out);
 }
 
 struct Forward(&'static Offscreen);
