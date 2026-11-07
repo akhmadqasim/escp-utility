@@ -1,0 +1,519 @@
+// Layout of the Windows Epson L800 driver's Maintenance tab and utility dialogs.
+//
+// Every rectangle is the dialog-unit (DLU) rectangle from the driver resources,
+// converted to pixels at 96 dpi with the dialog font:
+//   E_IUIRG5P.DLL dialog 903 "Maintenance" (295 x 267 DLU -> 443 x 434 px page)
+//   E_IHSRG5P.DLL dialogs 201, 210, 211, 226 (= 220), 227 (= 224), 271, 360
+// All templates use FONT 8, "MS Shell Dlg 2" = Tahoma 8 pt, whose dialog base
+// units are 6 x 13 px, so px_x = MulDiv(dlu_x, 6, 4) and px_y = MulDiv(dlu_y, 13, 8)
+// (each field rounded on its own, like USER32). The px values below are the
+// ones in phase2/layout/LAYOUT.md; the DLU rectangles are in the comments.
+//
+// Button, tab and title labels are the Windows (English) strings. The long
+// paragraphs are our own wording, set from Rust (src/main.rs).
+// All icons and pictures are our own SVGs (ui/icons), drawn where Windows
+// draws its bitmaps and at the same size.
+
+import { Button, ComboBox, Palette, TextEdit } from "std-widgets.slint";
+
+export global Strings {
+    out property <string> not-on-linux: "Not available on Linux yet";
+}
+
+component DlgText inherits Text {
+    font-size: 11px;
+    wrap: word-wrap;
+    vertical-alignment: top;
+    color: #000000;
+}
+
+// SS_ETCHEDHORZ: a dark line with a light line under it.
+component EtchedLine inherits Rectangle {
+    height: 3px;
+    Rectangle { y: 0; height: 1px; background: #a0a0a0; }
+    Rectangle { y: 1px; height: 1px; background: #ffffff; }
+}
+
+// A push button that can show a tooltip even while disabled.
+component DlgButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> primary;
+    in property <string> tip;
+    callback clicked;
+    Button {
+        width: 100%;
+        height: 100%;
+        text: root.text;
+        enabled: root.enabled;
+        primary: root.primary;
+        clicked => { root.clicked(); }
+    }
+    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
+}
+
+// Owner-drawn icon buttons of dialog 903: a 41 x 42 push button with a 32 x 32
+// picture at (5,5), moved by (+1,+1) while pressed.
+component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> enabled: true;
+    in property <string> tip;
+    callback clicked;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: !root.enabled ? #e0e0e0 : (ta.has-hover || fs.has-focus) ? #7a9cc6 : #d0d0d0;
+    background: !root.enabled ? #f5f5f5 : ta.pressed ? #cfe0f5 : ta.has-hover ? #eef5fd : #fdfdfd;
+    Image {
+        x: ta.pressed ? 6px : 5px;
+        y: ta.pressed ? 6px : 5px;
+        width: 32px;
+        height: 32px;
+        source: root.icon;
+        opacity: root.enabled ? 1.0 : 0.35;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == " " || e.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
+}
+
+component RadioButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    callback picked;
+    Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: 13px;
+        height: 13px;
+        border-radius: 6.5px;
+        border-width: 1px;
+        border-color: #333333;
+        background: #ffffff;
+        Rectangle {
+            width: 7px;
+            height: 7px;
+            border-radius: 3.5px;
+            background: Palette.accent-background;
+            visible: root.checked;
+        }
+    }
+    DlgText {
+        x: 18px;
+        width: parent.width - 18px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.text;
+    }
+    TouchArea { clicked => { root.picked(); } }
+}
+
+// Control 516: 33 x 36 box, 32 x 32 icon drawn at (0,0), not centred.
+component DlgIcon inherits Rectangle {
+    in property <image> source;
+    width: 33px;
+    height: 36px;
+    Image { x: 0; y: 0; width: 32px; height: 32px; source: root.source; }
+}
+
+// Shared look of the utility dialogs: fixed client size, Tahoma-sized text.
+// Return runs the default button and Escape the cancel button.
+component UtilityWindow inherits Window {
+    callback default-action();
+    callback cancel-action();
+    default-font-size: 11px;
+    default-font-family: "Liberation Sans";
+    background: #f0f0f0;
+    forward-focus: keys;
+    init => { Palette.color-scheme = ColorScheme.light; }
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Return) {
+                root.default-action();
+                return accept;
+            }
+            if (e.text == Key.Escape) {
+                root.cancel-action();
+                return accept;
+            }
+            reject
+        }
+    }
+    @children
+}
+
+export struct UtilityRow {
+    id: string,
+    title: string,
+    description: string,
+    icon: image,
+    enabled: bool,
+    // px rows from LAYOUT.md: title, button, etched line, description
+    title-y: length,
+    title-w: length,
+    button-y: length,
+    line-y: length,
+    desc-y: length,
+}
+
+// ---------------------------------------------------------------------------
+// Main window: a property sheet with dialog 903 as its only page.
+// The frame (tab strip height, insets, button row) is not in the resources and
+// depends on the Windows theme, so it is approximate. The comctl32 template
+// puts the tab control at (6,7) px with 75 x 23 px buttons.
+export component MainWindow inherits Window {
+    in property <string> queue: "L800";
+    in property <bool> dry-run;
+    in property <string> version-text;
+    callback utility-clicked(string);
+    callback close-window();
+    // Invoked from the worker thread (through the event loop) when a job is done.
+    callback job-done();
+
+    // Six slots, filled like E_IUICG5P FUN_68fd966c: table order Status
+    // Monitor 3, Auto Nozzle Check, Nozzle Check, Head Cleaning, Print Head
+    // Alignment, Ink Cartridge Replacement, Paper Guide Cleaning, Printer and
+    // Option Information, keeping the entries the model supports. For the L800,
+    // rows 2-4 are certain; SM3, Paper Guide Cleaning and Printer and Option
+    // Information are probable (capability calls not resolved statically).
+    // Titles: E_IUIRG5P strings 3950-3957, descriptions 3958-3965.
+    property <[UtilityRow]> utilities: [
+        { id: "status-monitor", title: "EPSON Status Monitor 3",
+          description: "Use this utility to automatically check for errors and also check the level of ink remaining.",
+          icon: @image-url("icons/status-monitor.svg"), enabled: false,
+          title-y: 10px, title-w: 300px, button-y: 11px, line-y: 28px, desc-y: 33px },
+        { id: "nozzle-check", title: "Nozzle Check",
+          description: "Use this utility if gaps or faint areas appear in your printout.",
+          icon: @image-url("icons/nozzle-check.svg"), enabled: true,
+          title-y: 72px, title-w: 197px, button-y: 73px, line-y: 89px, desc-y: 94px },
+        { id: "head-cleaning", title: "Head Cleaning",
+          description: "Use this utility if your print quality declines or the Nozzle Check indicates clogged nozzles.",
+          icon: @image-url("icons/head-cleaning.svg"), enabled: true,
+          title-y: 133px, title-w: 300px, button-y: 135px, line-y: 151px, desc-y: 156px },
+        { id: "head-alignment", title: "Print Head Alignment",
+          description: "Use this utility if misaligned vertical lines appear in your printout.",
+          icon: @image-url("icons/head-alignment.svg"), enabled: false,
+          title-y: 195px, title-w: 300px, button-y: 197px, line-y: 213px, desc-y: 218px },
+        { id: "paper-guide-cleaning", title: "Paper Guide Cleaning",
+          description: "Use this utility if your printout is dirty.",
+          icon: @image-url("icons/paper-guide.svg"), enabled: false,
+          title-y: 257px, title-w: 300px, button-y: 258px, line-y: 275px, desc-y: 280px },
+        { id: "printer-info", title: "Printer and Option Information",
+          description: "Use this utility to create or verify settings for your printer and optional devices.",
+          icon: @image-url("icons/printer-info.svg"), enabled: true,
+          title-y: 319px, title-w: 300px, button-y: 320px, line-y: 336px, desc-y: 341px },
+    ];
+
+    property <length> tab-strip-h: 21px;
+    property <length> inset: 2px;
+
+    title: root.queue + " Printing Preferences" + (root.dry-run ? "  (dry run: nothing is sent)" : "");
+    width: 6px + root.inset + 443px + root.inset + 6px;
+    height: 7px + root.tab-strip-h + root.inset + 434px + root.inset + 7px + 23px + 7px;
+    default-font-size: 11px;
+    default-font-family: "Liberation Sans";
+    background: #f0f0f0;
+    init => { Palette.color-scheme = ColorScheme.light; }
+
+    // Tab strip: one tab, "Maintenance" (the caption of dialog 903).
+    Rectangle {
+        x: 6px;
+        y: 7px;
+        width: 78px;
+        height: root.tab-strip-h + 1px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #adadad;
+        DlgText {
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            text: "Maintenance";
+        }
+    }
+
+    // Tab display area with the 443 x 434 px page.
+    Rectangle {
+        x: 6px;
+        y: 7px + root.tab-strip-h;
+        width: 443px + 2 * root.inset;
+        height: 434px + 2 * root.inset;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #adadad;
+        // Join the selected tab to the page.
+        Rectangle { x: 1px; y: 0; width: 76px; height: 1px; background: #ffffff; }
+
+        page := Rectangle {
+            x: root.inset;
+            y: root.inset;
+            width: 443px;
+            height: 434px;
+
+            for u in root.utilities: Rectangle {
+                // 3906-3911 OWNERDRAW (40,7+38n, 27x26 DLU)
+                IconButton {
+                    x: 60px;
+                    y: u.button-y;
+                    width: 41px;
+                    height: 42px;
+                    icon: u.icon;
+                    enabled: u.enabled;
+                    tip: u.enabled ? "" : Strings.not-on-linux;
+                    clicked => { root.utility-clicked(u.id); }
+                }
+                // 3900-3905 LTEXT (77,6+38n, 200x8 DLU)
+                DlgText {
+                    x: 116px;
+                    y: u.title-y;
+                    width: u.title-w;
+                    height: 13px;
+                    text: u.title;
+                    wrap: no-wrap;
+                    color: u.enabled ? #000000 : #8a8a8a;
+                }
+                // 3918-3923 ETCHEDHORZ (77,17+38n, 200x2 DLU)
+                EtchedLine {
+                    x: 116px;
+                    y: u.line-y;
+                    width: 300px;
+                }
+                // 3912-3917 LTEXT (77,20+38n, 200x18 DLU)
+                DlgText {
+                    x: 116px;
+                    y: u.desc-y;
+                    width: 300px;
+                    height: 29px;
+                    text: u.description;
+                    color: u.enabled ? #000000 : #8a8a8a;
+                }
+            }
+
+            // 3929 LTEXT "Language" (23,232,46x8 DLU)
+            DlgText { x: 35px; y: 377px; width: 69px; height: 13px; text: "Language"; wrap: no-wrap; }
+            // 3930 COMBOBOX droplist (71,231,134 DLU wide; closed height 21 px)
+            ComboBox {
+                x: 107px;
+                y: 375px;
+                width: 201px;
+                height: 21px;
+                model: ["English"];
+                current-index: 0;
+            }
+            // 3927 PUSHBUTTON "Speed && Progress..." (210,230,77x14 DLU)
+            DlgButton {
+                x: 315px; y: 374px; width: 116px; height: 23px;
+                text: "Speed & Progress...";
+                enabled: false;
+                tip: Strings.not-on-linux;
+            }
+            // 3928 PUSHBUTTON "Driver Update" (210,248,77x14 DLU)
+            DlgButton {
+                x: 315px; y: 403px; width: 116px; height: 23px;
+                text: "Driver Update";
+                enabled: false;
+                tip: Strings.not-on-linux;
+            }
+            // 3926 LTEXT (19,251,60x8 DLU): version text
+            DlgText { x: 29px; y: 408px; width: 90px; height: 13px; text: "Version " + root.version-text; wrap: no-wrap; }
+        }
+    }
+
+    DlgButton {
+        x: root.width - 6px - 75px;
+        y: root.height - 7px - 23px;
+        width: 75px;
+        height: 23px;
+        text: "Close";
+        clicked => { root.close-window(); }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Utility dialogs. Captions: E_IHSRG5P 1102 "Nozzle Check", 1101 "Head Cleaning".
+// Buttons: 1153 OK, 1154 Print, 1155/1185 Finish, 1156 Clean, 1157/1184 Cancel,
+// 1158 Start, 1159 Print Nozzle Check Pattern. Default buttons follow
+// FUN_00425ef8 as traced in phase2/rea/NOTES.md.
+
+// Dialog 201 (160x40 DLU = 240x65 px): modeless "Please wait..." popup (4250).
+export component WaitDialog inherits UtilityWindow {
+    in property <string> utility: "Nozzle Check";
+    in property <image> glyph: @image-url("icons/nozzle-check.svg");
+    title: root.utility;
+    width: 240px;
+    height: 65px;
+    DlgIcon { x: 15px; y: 16px; source: root.glyph; }
+    DlgText { x: 60px; y: 24px; width: 150px; height: 49px; text: "Please wait..."; }
+}
+
+// Dialog 210 (280x230 DLU = 420x374 px): Nozzle Check, step 1.
+// FUN_00429db8: 517 picture, 525 instructions (4210), 500 "Cancel", 501 "Print" (default).
+export component NozzleCheckDialog inherits UtilityWindow {
+    in property <string> body;
+    callback print();
+    callback cancel();
+    title: "Nozzle Check";
+    width: 420px;
+    height: 374px;
+    default-action => { root.print(); }
+    cancel-action => { root.cancel(); }
+    DlgIcon { x: 6px; y: 146px; source: @image-url("icons/nozzle-check.svg"); }
+    // 517 (86,7,108x80 DLU = 129,11,162x130): picture centred at native size 76x72.
+    Image { x: 129px + 43px; y: 11px + 29px; width: 76px; height: 72px; source: @image-url("icons/printer.svg"); }
+    DlgText { x: 45px; y: 150px; width: 339px; height: 180px; text: root.body; }
+    DlgButton { x: 237px; y: 332px; width: 84px; height: 29px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: 327px; y: 332px; width: 84px; height: 29px; text: "Print"; primary: true; clicked => { root.print(); } }
+}
+
+// Dialog 211 (290x255 DLU = 435x414 px): Nozzle Check, step 2.
+// FUN_004296e0: samples 518/519, 535 "Good" (4212), 536 "Cleaning needed" (4213),
+// 525 instructions (4211), 501 "Clean", 500 "Finish" (default).
+export component NozzleResultDialog inherits UtilityWindow {
+    in property <string> body;
+    callback clean();
+    callback finish();
+    title: "Nozzle Check";
+    width: 435px;
+    height: 414px;
+    default-action => { root.finish(); }
+    cancel-action => { root.finish(); }
+    // 518/519 (420x98 px): sample bitmaps 348x42 centred at offset (36,28).
+    Image { x: 8px + 36px; y: 5px + 28px; width: 348px; height: 42px; source: @image-url("icons/nozzle-good.svg"); }
+    DlgText { x: 6px; y: 106px; width: 416px; height: 23px; text: "Good"; horizontal-alignment: center; }
+    Image { x: 8px + 36px; y: 138px + 28px; width: 348px; height: 42px; source: @image-url("icons/nozzle-bad.svg"); }
+    DlgText { x: 6px; y: 239px; width: 416px; height: 23px; text: "Cleaning needed"; horizontal-alignment: center; }
+    DlgIcon { x: 6px; y: 271px; source: @image-url("icons/nozzle-check.svg"); }
+    DlgText { x: 51px; y: 275px; width: 366px; height: 93px; text: root.body; }
+    DlgButton { x: 252px; y: 374px; width: 84px; height: 29px; text: "Clean"; clicked => { root.clean(); } }
+    DlgButton { x: 342px; y: 374px; width: 84px; height: 29px; text: "Finish"; primary: true; clicked => { root.finish(); } }
+}
+
+// Dialog 226 (= 220, 280x229 DLU = 420x372 px): Head Cleaning, step 1, no-status variant.
+// FUN_00411038: 525 instructions (4201), radios 513 "Cleaning" (10470, default)
+// and 514 "Power Cleaning" (10471) from RCDATA 10460, description statics
+// 528/529 stay empty, 501 "Cancel", 500 "Start" (default).
+export component HeadCleaningDialog inherits UtilityWindow {
+    in property <string> body;
+    in-out property <bool> power;
+    callback start(bool);
+    callback cancel();
+    title: "Head Cleaning";
+    width: 420px;
+    height: 372px;
+    default-action => { root.start(root.power); }
+    cancel-action => { root.cancel(); }
+    DlgIcon { x: 6px; y: 179px; source: @image-url("icons/head-cleaning.svg"); }
+    DlgText { x: 45px; y: 11px; width: 339px; height: 169px; text: root.body; }
+    RadioButton {
+        x: 60px; y: 202px; width: 348px; height: 29px;
+        text: "Cleaning";
+        checked: !root.power;
+        picked => { root.power = false; }
+    }
+    RadioButton {
+        x: 60px; y: 263px; width: 348px; height: 29px;
+        text: "Power Cleaning";
+        checked: root.power;
+        picked => { root.power = true; }
+    }
+    DlgButton { x: 237px; y: 332px; width: 84px; height: 29px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: 327px; y: 332px; width: 84px; height: 29px; text: "Start"; primary: true; clicked => { root.start(root.power); } }
+}
+
+// Dialog 360 (290x255 DLU = 435x414 px): Power Cleaning confirmation.
+// FUN_0043ff54: 525 warning (10553), 585 illustration of the transportation
+// lock, 501 "Cancel" (back to step 1), 500 "OK" (default).
+export component PowerCleaningDialog inherits UtilityWindow {
+    in property <string> body;
+    callback ok();
+    callback cancel();
+    title: "Head Cleaning";
+    width: 435px;
+    height: 414px;
+    default-action => { root.ok(); }
+    cancel-action => { root.cancel(); }
+    DlgIcon { x: 6px; y: 28px; source: @image-url("icons/head-cleaning.svg"); }
+    DlgText { x: 51px; y: 31px; width: 366px; height: 109px; text: root.body; }
+    // 585 (8,140,420x195 px): bitmap 160x120 centred at offset (130,37).
+    Image { x: 8px + 130px; y: 140px + 37px; width: 160px; height: 120px; source: @image-url("icons/transport-lock.svg"); }
+    DlgText { x: 8px + 296px; y: 140px + 37px + 14px; width: 120px; text: "Unlocked (Printing)"; color: #3a7bd5; }
+    DlgText { x: 8px + 296px; y: 140px + 37px + 88px; width: 120px; text: "Locked (Transport)"; color: #6a7078; }
+    DlgButton { x: 252px; y: 374px; width: 84px; height: 29px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: 342px; y: 374px; width: 84px; height: 29px; text: "OK"; primary: true; clicked => { root.ok(); } }
+}
+
+// Dialog 227 (= 224, 280x206 DLU = 420x335 px): Head Cleaning finished, no-status variant.
+// FUN_0040f2fc: picture 517 hidden, 525 = 4205 (no status reply),
+// 503 "Print Nozzle Check Pattern" (default), 500 "Finish".
+export component CleaningDoneDialog inherits UtilityWindow {
+    in property <string> body;
+    callback nozzle-check();
+    callback finish();
+    title: "Head Cleaning";
+    width: 420px;
+    height: 335px;
+    default-action => { root.nozzle-check(); }
+    cancel-action => { root.finish(); }
+    DlgIcon { x: 6px; y: 146px; source: @image-url("icons/head-cleaning.svg"); }
+    DlgText { x: 45px; y: 130px; width: 339px; height: 141px; text: root.body; }
+    DlgButton { x: 78px; y: 293px; width: 243px; height: 29px; text: "Print Nozzle Check Pattern"; primary: true; clicked => { root.nozzle-check(); } }
+    DlgButton { x: 327px; y: 293px; width: 84px; height: 29px; text: "Finish"; clicked => { root.finish(); } }
+}
+
+// Dialog 271 (247x121 DLU = 371x197 px): message with one OK button.
+// 516 (10,10), 525 (40,8,200x48), 526 (40,56,200x35), IDOK (86,96,75x18).
+export component MessageDialog inherits UtilityWindow {
+    in property <string> utility;
+    in property <string> heading;
+    in property <string> body;
+    in property <image> glyph: @image-url("icons/nozzle-check.svg");
+    callback ok();
+    title: root.utility;
+    width: 371px;
+    height: 197px;
+    default-action => { root.ok(); }
+    cancel-action => { root.ok(); }
+    DlgIcon { x: 15px; y: 16px; source: root.glyph; }
+    DlgText { x: 60px; y: 13px; width: 300px; height: 78px; text: root.heading; }
+    DlgText { x: 60px; y: 91px; width: 300px; height: 57px; text: root.body; }
+    DlgButton { x: 129px; y: 156px; width: 113px; height: 29px; text: "OK"; primary: true; clicked => { root.ok(); } }
+}
+
+// Read-only text window, the size of dialog 5050 "Printer and Option
+// Information" (323x311 DLU = 485x505 px). Used for the CUPS queue details
+// and for the dry-run hexdump.
+export component TextDialog inherits UtilityWindow {
+    in property <string> caption;
+    in property <string> heading;
+    in property <string> content;
+    in property <bool> monospace;
+    callback ok();
+    title: root.caption;
+    width: 485px;
+    height: 505px;
+    default-action => { root.ok(); }
+    cancel-action => { root.ok(); }
+    DlgText { x: 11px; y: 11px; width: 463px; height: 39px; text: root.heading; }
+    TextEdit {
+        x: 11px;
+        y: 52px;
+        width: 463px;
+        height: 406px;
+        text: root.content;
+        read-only: true;
+        wrap: no-wrap;
+        font-size: 11px;
+        font-family: root.monospace ? "DejaVu Sans Mono" : "Liberation Sans";
+    }
+    DlgButton { x: 399px; y: 470px; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
+}
