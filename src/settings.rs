@@ -290,6 +290,12 @@ impl Values {
         v
     }
 
+    /// Reduce/Enlarge counts only on the plain sheet feed (FUN_68f8d8e4);
+    /// elsewhere it is greyed out, so it is neither saved nor shown as set.
+    pub fn reduce_active(&self) -> bool {
+        self.reduce && self.feed() == Feed::Sheet
+    }
+
     /// Borderless is only offered when the source, type and size allow it
     /// (PPD UIConstraints, SETTINGS.md §1).
     pub fn borderless_allowed(&self) -> bool {
@@ -350,10 +356,13 @@ impl Values {
     pub fn to_options(&self) -> Vec<(String, String)> {
         let s = &self.constrained();
         // Greyed-out controls are not saved; their PPD default goes instead.
-        // Reduce/Enlarge works only on the plain sheet feed (FUN_68f8d8e4),
-        // and only the active method's value counts.
-        let reduce = s.reduce && s.feed() == Feed::Sheet;
-        let defaults = Values::default();
+        // Only the active Reduce/Enlarge method's value counts.
+        let d = Values::default();
+        let (reduce, output, scale) = match (s.reduce_active(), s.by_percent) {
+            (false, _) => ("Off", d.output_size, d.scale),
+            (true, false) => ("ByOutputPaperSize", s.output_size, d.scale),
+            (true, true) => ("ByPercentage", d.output_size, s.scale),
+        };
         let o: Vec<(&str, String)> = vec![
             ("PrintQuality", QUALITY[s.quality].ppd.into()),
             ("InputSlot", SOURCES[s.source].ppd.into()),
@@ -363,20 +372,9 @@ impl Values {
             ("Color", if s.grayscale { "Grayscale" } else { "Color" }.into()),
             ("CorrectionColor", COLOR_MODES[s.color_mode].ppd.into()),
             ("GammaValue", GAMMAS[s.gamma].ppd.into()),
-            (
-                "ReduceEnlarge",
-                match (reduce, s.by_percent) {
-                    (false, _) => "Off",
-                    (true, false) => "ByOutputPaperSize",
-                    (true, true) => "ByPercentage",
-                }
-                .into(),
-            ),
-            (
-                "OutputPaper",
-                output_sizes()[if reduce && !s.by_percent { s.output_size } else { defaults.output_size }].ppd.into(),
-            ),
-            ("ScaleRatio", if reduce && s.by_percent { s.scale } else { defaults.scale }.to_string()),
+            ("ReduceEnlarge", reduce.into()),
+            ("OutputPaper", output_sizes()[output].ppd.into()),
+            ("ScaleRatio", scale.to_string()),
             ("PosterPrinting", if s.multi_page && s.poster { POSTERS[s.poster_index].0 } else { "Off" }.into()),
             ("Rotate180", if s.rotate180 { "On" } else { "Off" }.into()),
             ("MirrorImage", if s.mirror { "On" } else { "Off" }.into()),
@@ -572,6 +570,7 @@ YellowValue/Yellow: -25 *0 25
                 ..Values::default()
             },
             Values { reduce: true, by_percent: true, scale: 150, rotate180: true, ..Values::default() },
+            Values { reduce: true, output_size: 14, ..Values::default() },
         ] {
             let opts = v.to_options();
             let listing: String = LISTING
@@ -669,35 +668,29 @@ YellowValue/Yellow: -25 *0 25
             ],
         );
         check(Values { grayscale: true, ..d() }, &[("Color", "Grayscale")]);
-        check(Values { reduce: true, by_percent: true, scale: 150, ..d() }, &[("ReduceEnlarge", "ByPercentage"), ("ScaleRatio", "150")]);
-        check(Values { reduce: true, output_size: 14, ..d() }, &[("ReduceEnlarge", "ByOutputPaperSize"), ("OutputPaper", "Letter")]);
+        // Reduce/Enlarge: only the active method's value is saved.
+        check(
+            Values { reduce: true, by_percent: true, scale: 150, output_size: 3, ..d() },
+            &[("ReduceEnlarge", "ByPercentage"), ("ScaleRatio", "150"), ("OutputPaper", "A4")],
+        );
+        check(
+            Values { reduce: true, scale: 150, output_size: 14, ..d() },
+            &[("ReduceEnlarge", "ByOutputPaperSize"), ("OutputPaper", "Letter"), ("ScaleRatio", "100")],
+        );
+        // Greyed out (borderless, CD/DVD): Reduce/Enlarge is not saved.
+        check(
+            Values { media: 2, borderless: true, reduce: true, by_percent: true, scale: 150, ..d() },
+            &[("ReduceEnlarge", "Off"), ("ScaleRatio", "100")],
+        );
         // Invalid: borderless on plain paper, CD/DVD with Letter and plain
         // paper, EPSON Vivid with gamma 1.8, A3 without Reduce/Enlarge.
         check(Values { borderless: true, ..d() }, &[("Borderless", "Off")]);
         check(
             Values { source: 1, size: 14, media: 0, reduce: true, output_size: 5, ..d() },
-            &[("InputSlot", "CD_DVD"), ("MediaType", "CD_DVD"), ("PageSize", "A4"), ("OutputPaper", "A4")],
+            &[("InputSlot", "CD_DVD"), ("MediaType", "CD_DVD"), ("PageSize", "A4"), ("ReduceEnlarge", "Off"), ("OutputPaper", "A4")],
         );
         check(Values { color_mode: 1, gamma: 0, ..d() }, &[("CorrectionColor", "EPSONVivid"), ("GammaValue", "2.2")]);
         check(Values { size: FIRST_DOCUMENT_SIZE, ..d() }, &[("PageSize", "A3"), ("ReduceEnlarge", "ByOutputPaperSize")]);
-    }
-
-    #[test]
-    fn greyed_out_reduce_enlarge_is_not_saved() {
-        let get = |v: &Values, k: &str| v.to_options().into_iter().find(|(key, _)| key == k).unwrap().1;
-        // Borderless photo paper: Reduce/Enlarge is greyed out.
-        let v = Values { media: 2, borderless: true, reduce: true, by_percent: true, scale: 150, ..Values::default() };
-        assert_eq!(get(&v, "ReduceEnlarge"), "Off");
-        assert_eq!(get(&v, "ScaleRatio"), "100");
-        // CD/DVD: same.
-        let v = Values { source: 1, reduce: true, output_size: 3, ..Values::default() };
-        assert_eq!(get(&v, "ReduceEnlarge"), "Off");
-        assert_eq!(get(&v, "OutputPaper"), "A4");
-        // On a plain sheet only the active method's value is saved.
-        let v = Values { reduce: true, by_percent: true, scale: 150, output_size: 3, ..Values::default() };
-        assert_eq!((get(&v, "ReduceEnlarge"), get(&v, "ScaleRatio"), get(&v, "OutputPaper")), ("ByPercentage".into(), "150".into(), "A4".into()));
-        let v = Values { reduce: true, scale: 150, output_size: 3, ..Values::default() };
-        assert_eq!((get(&v, "ReduceEnlarge"), get(&v, "ScaleRatio"), get(&v, "OutputPaper")), ("ByOutputPaperSize".into(), "100".into(), "A6".into()));
     }
 
     #[test]

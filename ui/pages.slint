@@ -67,7 +67,7 @@ export global Prefs {
     // Something changed since the last load/save (enables Apply).
     in-out property <bool> dirty;
     // Bumped by Rust before saving: number edits show the saved value.
-    in-out property <int> commit-tick;
+    in property <int> commit-tick;
     // Approximate ink levels from one status query when the sheet opens.
     in property <[InkLevel]> inks;
     // The Current Settings window (dialog 4050) is open.

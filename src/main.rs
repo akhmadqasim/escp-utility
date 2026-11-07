@@ -436,7 +436,7 @@ impl App {
             ),
             (
                 "Scale ratio",
-                match (v.reduce, v.by_percent) {
+                match (v.reduce_active(), v.by_percent) {
                     (false, _) => "Off".to_string(),
                     (true, true) => format!("{} %", v.scale),
                     (true, false) => output_sizes()[v.output_size].label.to_string(),
@@ -462,7 +462,7 @@ impl App {
             self.dump.set_heading("Dry run: these settings were not saved. A real run would run this command:".into());
             self.dump.set_content(format!("lpoptions {}\n", args.join(" \\\n    ")).into());
             self.open(&self.dump);
-            self.main.global::<Prefs>().set_dirty(false);
+            p.set_dirty(false);
             return;
         }
         self.settings_io.set(true);
