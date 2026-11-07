@@ -173,6 +173,11 @@ impl App {
     // either an error message or the first dialog of the utility.
 
     fn start(&self, u: Utility) {
+        // Windows runs these dialogs modally: no second utility while one is
+        // reading status, spooling, or showing cleaning progress.
+        if self.wait.window().is_visible() || self.progress.window().is_visible() {
+            return;
+        }
         self.show_wait(u);
         let queue = self.queue.clone();
         bg(move || (u, at_least_min_wait(|| status::query(&queue))), |app, (u, res)| app.after_precheck(u, res));
@@ -281,7 +286,12 @@ impl App {
                     if let (Some(p), Mode::Live) = (&problem, &mode) {
                         return Err(Fail::Plain(format!("{COMM_ERROR}\n\n{p}")));
                     }
-                    let mut sent = transport::submit(&mode, &queue, name, &bytes).map_err(Fail::Plain)?;
+                    // No status session may be open while CUPS gets the job.
+                    let submitted = {
+                        let _device = status::exclusive();
+                        transport::submit(&mode, &queue, name, &bytes)
+                    };
+                    let mut sent = submitted.map_err(Fail::Plain)?;
                     if let Some(p) = problem {
                         sent.summary.push_str(&format!("\nA real run would stop here with a communication error: {p}"));
                     }
@@ -454,8 +464,12 @@ impl App {
         self.info.set_heading(
             format!("The printer is used through the CUPS queue \"{}\". This is what CUPS reports for it (read-only).", self.queue).into(),
         );
-        self.info.set_content(transport::queue_info(&self.queue).into());
-        let _ = self.info.show();
+        // lpstat can be slow when cupsd is: keep it off the UI thread.
+        let queue = self.queue.clone();
+        bg(move || transport::queue_info(&queue), |app, text| {
+            app.info.set_content(text.into());
+            let _ = app.info.show();
+        });
     }
 }
 
@@ -552,7 +566,12 @@ fn main() -> Result<(), slint::PlatformError> {
     wire(&app);
 
     app.main.show()?;
-    slint::run_event_loop()
+    let res = slint::run_event_loop();
+    // Let an in-flight status query finish Close/Exit, and keep new ones out
+    // until the process is gone (the lock is never released): never leave
+    // the printer in 1284.4 mode.
+    std::mem::forget(status::exclusive());
+    res
 }
 
 /// Connect every callback. Handlers reach the app through `app()`.

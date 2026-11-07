@@ -67,8 +67,8 @@ Like Windows (rea/NOTES.md §1.2-1.4), each utility first shows "Please wait..."
 - Just before spooling, the status is read again. ST=00 stops the job with the
   communication error (dialog 270).
 
-**Without a status reply** (no device node, no access, or CUPS has jobs): no
-pre-check. Head Cleaning uses dialog 226 (same layout and text as 220) and
+**Without a status reply** (no device node, no access, an incomplete reply,
+CUPS has jobs, or `lpstat` fails): no pre-check. Head Cleaning uses dialog 226 (same layout and text as 220) and
 goes straight to 227, with no progress dialog.
 
 **Both paths:** before sending, the CUPS queue is checked. A disabled (paused)
@@ -88,7 +88,9 @@ on the IEEE 1284.4 (D4) EPSON-CTRL channel (socket 2), answered with a binary
 - usblp stays bound, so nothing changes for CUPS. A query takes about 60 ms.
 - Each poll opens the node, then sends Enter, Init, OpenChannel, the status
   request, CloseChannel and Exit. Exit is always sent, also after an error.
-- The app queries only when `lpstat -o L800` shows no job.
+- The app queries only when `lpstat -o L800` succeeds and shows no job. A job
+  is never handed to `lp` while a session is open, and on exit the app waits
+  for a running session to finish.
 - Bytes on the wire are identical to Epson's own `ecbd` session (usbmon capture
   in the phase-2 spike). The tests replay that live capture and parse the live
   reply.

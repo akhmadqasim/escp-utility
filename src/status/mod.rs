@@ -45,7 +45,8 @@ pub struct Status {
 
 impl Status {
     pub fn from_reply(raw: &[u8]) -> Option<Status> {
-        let r = st2::parse(raw)?;
+        // A reply cut short (timeout, lost packet) may lack ER or WR: reject it.
+        let r = st2::parse(raw).filter(st2::Reply::complete)?;
         let byte = |id| r.get(id).and_then(|d| d.first().copied());
         Some(Status {
             st: byte(st2::id::ST),
@@ -69,27 +70,37 @@ pub enum QueryError {
     Failed(String),
 }
 
-/// True when `lpstat -o <queue>` lists jobs (or cannot be run).
-pub fn jobs_queued(queue: &str) -> bool {
-    match Command::new("lpstat").args(["-o", queue]).output() {
-        Ok(o) => !o.stdout.iter().all(u8::is_ascii_whitespace),
-        Err(_) => true,
+/// Whether `lpstat -o <queue>` lists jobs. Err when lpstat cannot be run or
+/// fails (cupsd down, unknown queue): the CUPS state is then unknown.
+pub fn jobs_queued(queue: &str) -> Result<bool, String> {
+    let o = Command::new("lpstat").args(["-o", queue]).output().map_err(|e| format!("Cannot run lpstat: {e}"))?;
+    if !o.status.success() {
+        return Err(format!("lpstat -o {queue}: {}", String::from_utf8_lossy(&o.stderr).trim()));
     }
+    Ok(!o.stdout.iter().all(u8::is_ascii_whitespace))
+}
+
+static DEVICE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Exclusive use of the printer: held by every status query (usblp allows
+/// only one opener), while a job is handed to CUPS, and at exit so no
+/// session is cut off before Close/Exit.
+pub fn exclusive() -> std::sync::MutexGuard<'static, ()> {
+    DEVICE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// One status query. Never touches the printer while CUPS has jobs.
-/// Queries are serialised: usblp allows only one opener.
+/// Queries are serialised through [`exclusive`].
 pub fn query(queue: &str) -> Result<Status, QueryError> {
-    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
-    if jobs_queued(queue) {
+    let _guard = exclusive();
+    let fail = QueryError::Failed;
+    if jobs_queued(queue).map_err(fail)? {
         return Err(QueryError::Busy);
     }
-    let fail = QueryError::Failed;
     let path = usblp::find_lp("L800").ok_or_else(|| fail("no /dev/usb/lp* for the L800".into()))?;
     let port = usblp::UsbLp::open(&path).map_err(|e| fail(format!("{}: {e}", path.display())))?;
     let raw = d4::Session::new(port).query().map_err(|e| fail(e.to_string()))?;
-    Status::from_reply(&raw).ok_or_else(|| fail("reply is not @BDC ST2".into()))
+    Status::from_reply(&raw).ok_or_else(|| fail("reply is not a complete @BDC ST2".into()))
 }
 
 /// Result of the Windows pre-check (E_IHUTG5P `FUN_00419768` + `FUN_0041a2f8`).
@@ -293,6 +304,13 @@ mod tests {
         assert_eq!(title, "Ink low");
         assert!(text.starts_with("Light Cyan: "), "{text}");
         assert_eq!(precheck(&s, true), Precheck::Proceed);
+    }
+
+    #[test]
+    fn incomplete_reply_is_rejected() {
+        let mut raw = st2::tests::live();
+        raw.truncate(raw.len() - 1);
+        assert_eq!(Status::from_reply(&raw), None);
     }
 
     #[test]

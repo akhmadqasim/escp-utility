@@ -80,7 +80,8 @@ fn lp_raw(queue: &str, name: &str, bytes: &[u8]) -> Result<Sent, String> {
 /// "Paused" gives message 3000). The CUPS equivalent is a disabled
 /// (stopped) queue or one that rejects jobs.
 pub fn queue_problem(queue: &str) -> Option<String> {
-    let out = match Command::new("lpstat").args(["-p", queue, "-a", queue]).output() {
+    // C locale: the lines parsed below are translated in other locales.
+    let out = match Command::new("lpstat").env("LC_ALL", "C").args(["-p", queue, "-a", queue]).output() {
         Ok(o) => o,
         Err(e) => return Some(format!("Cannot run lpstat: {e}")),
     };
