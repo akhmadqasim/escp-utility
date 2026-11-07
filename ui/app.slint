@@ -178,8 +178,6 @@ export component MainWindow inherits Window {
     in property <string> version-text;
     callback utility-clicked(string);
     callback close-window();
-    // Invoked from the worker thread (through the event loop) when a job is done.
-    callback job-done();
 
     // Six slots, filled like E_IUICG5P FUN_68fd966c: table order Status
     // Monitor 3, Auto Nozzle Check, Nozzle Check, Head Cleaning, Print Head
@@ -191,7 +189,7 @@ export component MainWindow inherits Window {
     property <[UtilityRow]> utilities: [
         { id: "status-monitor", title: "EPSON Status Monitor 3",
           description: "Use this utility to automatically check for errors and also check the level of ink remaining.",
-          icon: @image-url("icons/status-monitor.svg"), enabled: false,
+          icon: @image-url("icons/status-monitor.svg"), enabled: true,
           title-y: 10px, title-w: 300px, button-y: 11px, line-y: 28px, desc-y: 33px },
         { id: "nozzle-check", title: "Nozzle Check",
           description: "Use this utility if gaps or faint areas appear in your printout.",
@@ -470,14 +468,18 @@ export component CleaningDoneDialog inherits UtilityWindow {
     DlgButton { x: 327px; y: 293px; width: 84px; height: 29px; text: "Finish"; clicked => { root.finish(); } }
 }
 
-// Dialog 271 (247x121 DLU = 371x197 px): message with one OK button.
-// 516 (10,10), 525 (40,8,200x48), 526 (40,56,200x35), IDOK (86,96,75x18).
+// Dialog 270 / 271 (247x121 DLU = 371x197 px): message box.
+// 516 (10,10), 525 (40,8,200x48), 526 (40,56,200x35).
+// 271: IDOK (86,96,75x18). 270 (status errors): 508 [Details] (40,96,70x18)
+// and IDOK (135,96,70x18); Details opens Status Monitor 3.
 export component MessageDialog inherits UtilityWindow {
     in property <string> utility;
     in property <string> heading;
     in property <string> body;
+    in property <bool> show-details;
     in property <image> glyph: @image-url("icons/nozzle-check.svg");
     callback ok();
+    callback details();
     title: root.utility;
     width: 371px;
     height: 197px;
@@ -486,7 +488,58 @@ export component MessageDialog inherits UtilityWindow {
     DlgIcon { x: 15px; y: 16px; source: root.glyph; }
     DlgText { x: 60px; y: 13px; width: 300px; height: 78px; text: root.heading; }
     DlgText { x: 60px; y: 91px; width: 300px; height: 57px; text: root.body; }
-    DlgButton { x: 129px; y: 156px; width: 113px; height: 29px; text: "OK"; primary: true; clicked => { root.ok(); } }
+    if root.show-details: DlgButton { x: 60px; y: 156px; width: 105px; height: 29px; text: "Details"; clicked => { root.details(); } }
+    DlgButton {
+        x: root.show-details ? 203px : 129px;
+        y: 156px;
+        width: root.show-details ? 105px : 113px;
+        height: 29px;
+        text: "OK";
+        primary: true;
+        clicked => { root.ok(); }
+    }
+}
+
+// Dialog 223 (280x206 DLU = 420x335 px): Head Cleaning in progress.
+// FUN_004123b8: 525 "Please wait..." (4202), 517 animation (12 frames,
+// 500 ms), all buttons hidden. FUN_00412ae8: once cleaning starts, 525 =
+// 4203 and the custom-painted bar 520 (29,93,212x14 DLU) appears.
+export component ProgressDialog inherits UtilityWindow {
+    in property <string> body;
+    in property <bool> bar-visible;
+    in property <float> value;
+    title: "Head Cleaning";
+    width: 420px;
+    height: 335px;
+    DlgIcon { x: 6px; y: 146px; source: @image-url("icons/head-cleaning.svg"); }
+    // 517 (129,11,162x130 px): our printer picture with a moving print head.
+    Image { x: 129px + 43px; y: 11px + 29px; width: 76px; height: 72px; source: @image-url("icons/printer.svg"); }
+    Rectangle {
+        property <float> phase: Math.mod(animation-tick() / 6000ms, 1.0);
+        x: 129px + 43px + 6px + (phase < 0.5 ? phase * 2 : 2 - phase * 2) * 36px;
+        y: 11px + 29px + 30px;
+        width: 12px;
+        height: 6px;
+        border-radius: 1px;
+        background: #5a6470;
+    }
+    if root.bar-visible: Rectangle {
+        x: 44px;
+        y: 151px;
+        width: 318px;
+        height: 23px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #a0a0a0;
+        Rectangle {
+            x: 1px;
+            y: 1px;
+            width: (parent.width - 2px) * clamp(root.value, 0, 1);
+            height: parent.height - 2px;
+            background: #0078d7;
+        }
+    }
+    DlgText { x: 45px; y: 187px; width: 339px; height: 98px; text: root.body; }
 }
 
 // Read-only text window, the size of dialog 5050 "Printer and Option
@@ -516,4 +569,81 @@ export component TextDialog inherits UtilityWindow {
         font-family: root.monospace ? "DejaVu Sans Mono" : "Liberation Sans";
     }
     DlgButton { x: 399px; y: 470px; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
+}
+
+export struct InkLevel {
+    name: string,
+    color: color,
+    // 0..100, or -1 when the printer reports no value
+    level: int,
+}
+
+// Ink meter (EPInkMeterLib, 30x42 DLU): a tank that fills from the bottom.
+component InkMeter inherits Rectangle {
+    in property <InkLevel> ink;
+    background: #ffffff;
+    border-width: 1px;
+    border-color: #808080;
+    Rectangle {
+        x: 1px;
+        width: parent.width - 2px;
+        height: (parent.height - 2px) * max(root.ink.level, 0) / 100;
+        y: parent.height - 1px - self.height;
+        background: root.ink.color;
+    }
+    if root.ink.level < 0: DlgText {
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "?";
+    }
+}
+
+// EPSON Status Monitor 3, E_IASRG5P dialog 102 (319x419 DLU). Windows shows
+// or hides its sections at run time; this is the status section, the
+// "Approximate Ink Levels" group and the OK button, at the template rectangles:
+// 307 status title (5,35,224x8), 212 message (5,50,224x45), 210 picture
+// (234,35,80x60), group 311 (5,120,309x106), meters 390-395 (22+49n,130,30x42),
+// names 2700-2705 (13+49n,177,48x16), note 30601 (10,200,285x24), OK (139,216,55x14).
+export component StatusMonitorDialog inherits UtilityWindow {
+    in property <string> printer: "L800";
+    in property <string> title-text;
+    in property <string> body;
+    in property <[InkLevel]> inks;
+    in property <string> note: "The ink levels shown are estimates and can differ from the real levels. To be sure, look at the ink tanks on the printer.";
+    callback ok();
+    title: "EPSON Status Monitor 3 : " + root.printer;
+    width: 479px;
+    height: 412px;
+    default-action => { root.ok(); }
+    cancel-action => { root.ok(); }
+    DlgText { x: 8px; y: 8px; width: 463px; height: 41px; text: root.printer; font-size: 14px; }
+    DlgText { x: 8px; y: 57px; width: 336px; height: 13px; text: root.title-text; font-weight: 700; }
+    Rectangle {
+        x: 8px; y: 81px; width: 336px; height: 73px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #a0a0a0;
+        DlgText { x: 4px; y: 3px; width: parent.width - 8px; height: parent.height - 6px; text: root.body; }
+    }
+    Image { x: 351px + 22px; y: 57px + 13px; width: 76px; height: 72px; source: @image-url("icons/printer.svg"); }
+    // Group 311 "Approximate Ink Levels"
+    Rectangle {
+        x: 8px; y: 202px; width: 464px; height: 168px;
+        border-width: 1px;
+        border-color: #c8c8c8;
+        border-radius: 3px;
+    }
+    Rectangle { x: 14px; y: 195px; width: 130px; height: 14px; background: #f0f0f0;
+        DlgText { x: 3px; text: "Approximate Ink Levels"; wrap: no-wrap; }
+    }
+    for ink[n] in root.inks: Rectangle {
+        x: (13 + 49 * n) * 1.5px;
+        y: 211px;
+        width: 72px;
+        height: 103px;
+        InkMeter { x: 13.5px; y: 0; width: 45px; height: 68px; ink: ink; }
+        DlgText { x: 0; y: 77px; width: 72px; height: 26px; text: ink.name; horizontal-alignment: center; }
+    }
+    DlgText { x: 15px; y: 325px; width: 428px; height: 39px; text: root.note; }
+    DlgButton { x: 198px; y: 380px; width: 83px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
 }

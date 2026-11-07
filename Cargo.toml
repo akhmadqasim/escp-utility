@@ -6,6 +6,7 @@ description = "Linux maintenance utility for the Epson L800, laid out like the W
 publish = false
 
 [dependencies]
+libc = "0.2"
 slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Slint's text stack (fontique) links fontconfig through pkg-config by default.

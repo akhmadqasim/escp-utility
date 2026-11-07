@@ -1,0 +1,10 @@
+# Epson L800: give the user of the active local session read/write access to
+# the printer's usblp node (/dev/usb/lpN), which epson-l800-utility uses to read
+# the printer status (IEEE 1284.4 "st" request). Without this rule the node is
+# root:lp 0660 on a stock system.
+#
+# Install:
+#   sudo install -m 644 packaging/70-epson-l800-utility.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=usbmisc
+# (or unplug and replug the printer)
+SUBSYSTEM=="usbmisc", KERNEL=="lp*", ATTRS{idVendor}=="04b8", ATTRS{idProduct}=="002a", TAG+="uaccess"
