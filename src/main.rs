@@ -1251,7 +1251,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // The queue's PPD from cupsd (read-only): the sheet, and the device ID
     // when no USB one is cached.
     let ppd = ppd::fetch(&queue).and_then(|t| ppd::parse(&t)).inspect_err(|e| eprintln!("epson-l800-utility: {e}")).ok();
-    let printer = Identity::of(&queue, ppd.as_ref().and_then(|p| p.device_id.as_deref()));
+    let printer = Identity::of(&queue, ppd.as_ref().and_then(|p| p.device_id.as_deref()), ppd.as_ref().and_then(|p| p.nickname.as_deref()));
     let profile = profile::find(&profiles, printer.id.mdl()).cloned();
     let sheet = match ppd {
         Some(p) if p.nickname.as_deref().is_some_and(|n| n.starts_with(L800_NICKNAME)) => None,

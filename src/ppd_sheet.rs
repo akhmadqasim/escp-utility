@@ -135,6 +135,10 @@ fn base_label(labels: &[&str]) -> String {
     for l in &labels[1..] {
         n = first.bytes().zip(l.bytes()).take(n).take_while(|(a, b)| a == b).count();
     }
+    // Bytes compared: labels that differ inside a UTF-8 character.
+    while !first.is_char_boundary(n) {
+        n -= 1;
+    }
     let prefix = &first[..n];
     prefix.rfind('-').map_or(prefix, |i| &prefix[..i]).trim().to_string()
 }
@@ -711,6 +715,8 @@ mod tests {
         assert_eq!(base_label(&["X-Standard-Vivid", "X-Standard"]), "X");
         assert_eq!(base_label(&["Thick-Paper-High", "Thick-Paper-Standard"]), "Thick-Paper");
         assert_eq!(base_label(&["CD/DVD-Standard"]), "CD/DVD");
+        // é and è share their first byte: no cut inside the character.
+        assert_eq!(base_label(&["Papier-é", "Papier-è"]), "Papier");
         assert_eq!(split_level("PLAIN_SUPERDRAFT"), Some(("PLAIN", 0)));
         assert_eq!(split_level("CD_DVD"), None);
     }

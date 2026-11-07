@@ -248,11 +248,11 @@ export component MainPage inherits Rectangle {
 
     Group { x: 8px; y: 114px; width: 255px; height: 133px; title: "Paper Options"; }
     DlgText { x: 16px; y: 139px; width: 38px; height: 13px; text: "Source"; wrap: no-wrap; horizontal-alignment: right; }
-    Combo { x: 60px; y: 135px; width: 195px; model: Prefs.source-labels; current-index <=> Prefs.source; enabled: Prefs.has-source; tip: Prefs.has-source ? "" : Strings.not-in-ppd; selected => { Prefs.changed(); } }
+    Combo { x: 60px; y: 135px; width: 195px; model: Prefs.source-labels; current-index <=> Prefs.source; enabled: Prefs.has-source; missing: !Prefs.has-source; tip: Prefs.has-source ? "" : Strings.not-in-ppd; selected => { Prefs.changed(); } }
     DlgText { x: 16px; y: 165px; width: 38px; height: 13px; text: "Type"; wrap: no-wrap; horizontal-alignment: right; }
-    Combo { x: 60px; y: 161px; width: 195px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; enabled: Prefs.has-media; tip: Prefs.has-media ? "" : Strings.not-in-ppd; selected => { Prefs.pick("media", self.current-index); } }
+    Combo { x: 60px; y: 161px; width: 195px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; enabled: Prefs.has-media; missing: !Prefs.has-media; tip: Prefs.has-media ? "" : Strings.not-in-ppd; selected => { Prefs.pick("media", self.current-index); } }
     DlgText { x: 16px; y: 191px; width: 38px; height: 13px; text: "Size"; wrap: no-wrap; horizontal-alignment: right; }
-    Combo { x: 60px; y: 187px; width: 195px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; enabled: Prefs.has-size; tip: Prefs.has-size ? "" : Strings.not-in-ppd; selected => { Prefs.pick("size", self.current-index); } }
+    Combo { x: 60px; y: 187px; width: 195px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; enabled: Prefs.has-size; missing: !Prefs.has-size; tip: Prefs.has-size ? "" : Strings.not-in-ppd; selected => { Prefs.pick("size", self.current-index); } }
     // On the same row as Quiet Mode, so both groups end together.
     Radio {
         x: 60px; y: 226px; width: 60px; height: 13px; text: "Borders";
@@ -300,11 +300,11 @@ export component AdvancedPage inherits Rectangle {
     height: 434px;
     background: #ffffff;
     Group { x: 8px; y: 8px; width: 210px; height: 147px; title: "Paper & Quality Options"; }
-    Combo { x: 16px; y: 29px; width: 194px; model: Prefs.source-labels; current-index <=> Prefs.source; enabled: Prefs.has-source; tip: Prefs.has-source ? "" : Strings.not-in-ppd; selected => { Prefs.changed(); } }
-    Combo { x: 16px; y: 55px; width: 194px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; enabled: Prefs.has-media; tip: Prefs.has-media ? "" : Strings.not-in-ppd; selected => { Prefs.pick("media", self.current-index); } }
+    Combo { x: 16px; y: 29px; width: 194px; model: Prefs.source-labels; current-index <=> Prefs.source; enabled: Prefs.has-source; missing: !Prefs.has-source; tip: Prefs.has-source ? "" : Strings.not-in-ppd; selected => { Prefs.changed(); } }
+    Combo { x: 16px; y: 55px; width: 194px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; enabled: Prefs.has-media; missing: !Prefs.has-media; tip: Prefs.has-media ? "" : Strings.not-in-ppd; selected => { Prefs.pick("media", self.current-index); } }
     // 3105 Print Quality: the print modes of this paper type (strings 1400-1430).
-    Combo { x: 16px; y: 81px; width: 194px; model: Prefs.adv-quality-labels; current-index <=> Prefs.adv-quality-pos; enabled: Prefs.has-quality; tip: Prefs.has-quality ? "" : Strings.not-in-ppd; selected => { Prefs.pick("quality", self.current-index); } }
-    Combo { x: 16px; y: 107px; width: 194px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; enabled: Prefs.has-size; tip: Prefs.has-size ? "" : Strings.not-in-ppd; selected => { Prefs.pick("size", self.current-index); } }
+    Combo { x: 16px; y: 81px; width: 194px; model: Prefs.adv-quality-labels; current-index <=> Prefs.adv-quality-pos; enabled: Prefs.has-quality; missing: !Prefs.has-quality; tip: Prefs.has-quality ? "" : Strings.not-in-ppd; selected => { Prefs.pick("quality", self.current-index); } }
+    Combo { x: 16px; y: 107px; width: 194px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; enabled: Prefs.has-size; missing: !Prefs.has-size; tip: Prefs.has-size ? "" : Strings.not-in-ppd; selected => { Prefs.pick("size", self.current-index); } }
     Radio {
         x: 16px; y: 134px; width: 68px; height: 13px; text: "Borders";
         checked: !Prefs.borderless || !Prefs.borderless-allowed;
@@ -338,9 +338,9 @@ export component AdvancedPage inherits Rectangle {
     Radio { x: 232px; y: 73px; width: 86px; height: 13px; text: "ICM"; enabled: false; tip: "No driver ICM on Linux: use colour management in the application or colord."; }
     EtchedLine { x: 232px; y: 93px; width: 195px; }
     DlgText { x: 232px; y: 106px; width: 57px; height: 13px; text: "Color Mode"; wrap: no-wrap; }
-    Combo { x: 297px; y: 102px; width: 130px; model: Prefs.color-mode-labels; current-index <=> Prefs.color-mode; enabled: Prefs.has-color-mode; tip: Prefs.has-color-mode ? "" : Strings.not-in-ppd; selected => { Prefs.changed(); } }
+    Combo { x: 297px; y: 102px; width: 130px; model: Prefs.color-mode-labels; current-index <=> Prefs.color-mode; enabled: Prefs.has-color-mode; missing: !Prefs.has-color-mode; tip: Prefs.has-color-mode ? "" : Strings.not-in-ppd; selected => { Prefs.changed(); } }
     DlgText { x: 232px; y: 132px; width: 57px; height: 13px; text: "Gamma"; wrap: no-wrap; }
-    Combo { x: 297px; y: 128px; width: 130px; model: Prefs.gamma-labels; current-index <=> Prefs.gamma; enabled: Prefs.has-gamma && !Prefs.vivid; tip: !Prefs.has-gamma ? Strings.not-in-ppd : Prefs.vivid ? Strings.gamma-vivid : ""; selected => { Prefs.changed(); } }
+    Combo { x: 297px; y: 128px; width: 130px; model: Prefs.gamma-labels; current-index <=> Prefs.gamma; enabled: Prefs.has-gamma && !Prefs.vivid; missing: !Prefs.has-gamma; tip: !Prefs.has-gamma ? Strings.not-in-ppd : Prefs.vivid ? Strings.gamma-vivid : ""; selected => { Prefs.changed(); } }
     DlgButton { x: 346px; y: 172px; width: 81px; height: 23px; text: "Settings..."; enabled: Prefs.has-color-controls; tip: Prefs.has-color-controls ? "" : Strings.not-in-ppd; clicked => { Prefs.open-dialog("color-controls"); } }
     // Ours, for other printers: the PPD options no Windows control takes.
     if Prefs.ppd-mode: DlgButton {

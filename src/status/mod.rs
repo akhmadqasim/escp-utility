@@ -150,15 +150,17 @@ pub fn precheck(s: &Status, cleaning: bool) -> Precheck {
 
 /// The pre-check for printers without the Windows L800 tables, as Epson's
 /// Linux utility gates its buttons (`updateCurrenInkJetPrinterStaus`,
-/// rea/MULTI-MODEL.md §1.2) plus escpr's cleaning warning: ST 00 or 01
-/// stops both; an ink at 0 stops both; an ink at 1-4 %, or a warning
-/// 0x51-0x5A (`EPS_PRNWARN_DISABLE_CLEAN`), stops cleaning; ST 07 is
-/// "Now cleaning!".
+/// rea/MULTI-MODEL.md §1.2) plus escpr's cleaning warning: an error stops
+/// both (ST 00, an ER field, or an ST that escpr `serAnalyzeStatus` does
+/// not know and so takes as an error, such as 11; `message_generic` shows
+/// those as "Printer error"); ST 01 stops both; an ink at 0 stops both; an
+/// ink at 1-4 %, or a warning 0x51-0x5A (`EPS_PRNWARN_DISABLE_CLEAN`),
+/// stops cleaning; ST 07 is "Now cleaning!".
 pub fn precheck_generic(s: &Status, cleaning: bool) -> Precheck {
     match s.st {
-        Some(0x00) => return Precheck::Problem,
         Some(0x01) => return Precheck::CannotComplete,
-        _ => {}
+        Some(0x02..=0x04 | 0x07 | 0x08 | 0x0A | 0x0D) | None if s.er.is_none() => {}
+        _ => return Precheck::Problem,
     }
     if s.inks.iter().any(|i| i.percent() == Some(0)) {
         return Precheck::InkOut;
@@ -472,6 +474,10 @@ mod tests {
         let ok = [(0, 0, 50), (0, 1, 60)];
         assert_eq!(precheck_generic(&synthetic(0x00, Some(0x04), &[], &ok), false), Precheck::Problem);
         assert_eq!(precheck_generic(&synthetic(0x01, None, &[], &ok), false), Precheck::CannotComplete);
+        // An ST escpr does not know is an error there (and "Printer error" here).
+        assert_eq!(precheck_generic(&synthetic(0x11, None, &[], &ok), false), Precheck::Problem);
+        assert_eq!(precheck_generic(&synthetic(0x0E, None, &[], &ok), true), Precheck::Problem);
+        assert_eq!(precheck_generic(&synthetic(0x04, Some(0x06), &[], &ok), false), Precheck::Problem);
         let out = synthetic(0x04, None, &[], &[(0, 0, 0), (0, 1, 60)]);
         assert_eq!(precheck_generic(&out, false), Precheck::InkOut);
         assert_eq!(precheck_generic(&out, true), Precheck::InkOut);

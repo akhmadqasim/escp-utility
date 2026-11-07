@@ -42,9 +42,16 @@ impl DeviceId {
         DeviceId { raw: raw.trim().to_string(), fields }
     }
 
-    /// The value of the first field with one of these keys.
+    /// The value of the first field with one of these keys (any case, as
+    /// CUPS reads the keys).
     fn get(&self, keys: &[&str]) -> Option<&str> {
-        self.fields.iter().find(|(k, _)| keys.contains(&k.as_str())).map(|(_, v)| v.as_str())
+        self.fields.iter().find(|(k, _)| keys.iter().any(|w| k.eq_ignore_ascii_case(w))).map(|(_, v)| v.as_str())
+    }
+
+    /// The serial number field, which CUPS puts in a usb:// URI before the
+    /// USB descriptor's (backend/usb-libusb.c `make_device_uri`).
+    fn serial(&self) -> Option<&str> {
+        self.get(&["SERIALNUMBER", "SERN", "SN"]).filter(|s| !s.is_empty())
     }
 
     pub fn mfg(&self) -> Option<&str> {
@@ -61,10 +68,11 @@ impl DeviceId {
     }
 
     /// An Epson that speaks ESC/P: Epson's Linux utility gives such a
-    /// printer Nozzle Check and Head Cleaning (CMD ESCPL2 or ESCPR*).
+    /// printer Nozzle Check and Head Cleaning (CMD ESCPL2* or ESCPR*; older
+    /// models report `ESCPL2-00`).
     pub fn maintenance(&self) -> bool {
         self.mfg().is_some_and(|m| m.eq_ignore_ascii_case("EPSON"))
-            && self.cmd().iter().any(|c| *c == "ESCPL2" || c.starts_with("ESCPR"))
+            && self.cmd().iter().any(|c| c.starts_with("ESCPL2") || c.starts_with("ESCPR"))
     }
 
     /// The printer has the IEEE 1284.4 (D4) channel that the status request uses.
@@ -115,16 +123,15 @@ pub fn is_epson(q: &Queue, make_model: &str) -> bool {
     q.uri.to_ascii_lowercase().contains("epson") || make_model.to_ascii_lowercase().starts_with("epson")
 }
 
-/// The Epson queues, with their make and model.
+/// The Epson queues, with their make and model. One `lpoptions` per queue,
+/// run side by side (each can take a second).
 pub fn epson_queues() -> Vec<(Queue, String)> {
-    queues(None)
-        .into_iter()
-        .map(|q| {
-            let mm = make_model(&q.name);
-            (q, mm)
-        })
-        .filter(|(q, mm)| is_epson(q, mm))
-        .collect()
+    let qs = queues(None);
+    let mms: Vec<String> = std::thread::scope(|s| {
+        let handles: Vec<_> = qs.iter().map(|q| s.spawn(|| make_model(&q.name))).collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_default()).collect()
+    });
+    qs.into_iter().zip(mms).filter(|(q, mm)| is_epson(q, mm)).collect()
 }
 
 /// `%XX` decoding (URIs).
@@ -162,19 +169,24 @@ fn uri_device_id(uri: &str) -> Option<DeviceId> {
     Some(DeviceId::parse(&format!("MFG:{};MDL:{};", percent_decode(mfg), percent_decode(mdl))))
 }
 
-/// The usblp device whose USB serial is `serial`: its node `/dev/usb/lpN`
-/// and its cached IEEE 1284 ID. `root` is `/sys/class/usbmisc` (tests use
-/// a fake tree).
+/// The usblp device whose serial is `serial` (the USB descriptor's, or the
+/// SN field of its IEEE 1284 ID, which CUPS prefers for the URI): its node
+/// `/dev/usb/lpN` and its cached IEEE 1284 ID. `root` is
+/// `/sys/class/usbmisc` (tests use a fake tree).
 pub fn usb_match(root: &Path, serial: &str) -> Option<(PathBuf, String)> {
+    // An empty serial would match every device that has none.
+    if serial.is_empty() {
+        return None;
+    }
     for e in fs::read_dir(root).ok()?.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         if !name.starts_with("lp") {
             continue;
         }
         let dev = e.path().join("device");
+        let Ok(id) = fs::read_to_string(dev.join("ieee1284_id")) else { continue };
         let found = fs::read_to_string(dev.join("../serial")).unwrap_or_default();
-        if found.trim() == serial {
-            let id = fs::read_to_string(dev.join("ieee1284_id")).ok()?;
+        if found.trim() == serial || DeviceId::parse(&id).serial() == Some(serial) {
             return Some((PathBuf::from("/dev/usb").join(name), id));
         }
     }
@@ -206,10 +218,13 @@ pub struct Identity {
 
 impl Identity {
     /// Identify the printer of `queue` from the sources in the module
-    /// comment; `ppd_id` is the queue PPD's `*1284DeviceID`, if any.
-    pub fn of(queue: &str, ppd_id: Option<&str>) -> Identity {
+    /// comment; `ppd_id` is the queue PPD's `*1284DeviceID`, if any, and
+    /// `nickname` its `*NickName`, which cupsd reports as
+    /// printer-make-and-model (without one, `lpoptions -p` is asked).
+    pub fn of(queue: &str, ppd_id: Option<&str>, nickname: Option<&str>) -> Identity {
         let uri = queues(Some(queue)).into_iter().find(|q| q.name == queue).map(|q| q.uri).unwrap_or_default();
-        Identity::from_parts(queue, uri, make_model(queue), Path::new(USBMISC), ppd_id)
+        let make_model = nickname.map_or_else(|| make_model(queue), str::to_string);
+        Identity::from_parts(queue, uri, make_model, Path::new(USBMISC), ppd_id)
     }
 
     fn from_parts(queue: &str, uri: String, make_model: String, usbmisc: &Path, ppd_id: Option<&str>) -> Identity {
@@ -296,6 +311,9 @@ mod tests {
         assert!(!DeviceId::parse("MFG:HP;CMD:ESCPL2,D4;MDL:X;").maintenance());
         // D4PX alone is not D4.
         assert!(!DeviceId::parse("MFG:EPSON;CMD:ESCPL2,D4PX;").status());
+        // Older models' ESCPL2-00, and keys in another case.
+        assert!(DeviceId::parse("MFG:EPSON;CMD:ESC,ESCPL2-00,BDC,D4;MDL:Stylus Photo R220;").maintenance());
+        assert!(DeviceId::parse("Mfg:EPSON;Cmd:ESCPR1,D4;Mdl:X;").status());
     }
 
     #[test]
@@ -353,6 +371,12 @@ mod tests {
         assert_eq!((i.source, i.id.mdl()), (Source::Ppd, Some("ET-2750 Series")));
         assert!(!i.id.maintenance());
         assert_eq!(i.status_node_in(&root), None);
+        // An empty serial matches nothing (lp0 has no serial file below).
+        fs::remove_file(root.join("lp0-usbdev/serial")).unwrap();
+        assert_eq!(usb_match(&root, ""), None);
+        // CUPS takes the URI serial from the ID's SN field when it has one.
+        fs::write(root.join("lp0-usbdev/iface/ieee1284_id"), "MFG:EPSON;CMD:ESCPR1,D4;MDL:X;SN:IDSERIAL1;").unwrap();
+        assert_eq!(usb_match(&root, "IDSERIAL1").map(|m| m.0), Some(PathBuf::from("/dev/usb/lp0")));
         fs::remove_dir_all(root).unwrap();
     }
 }

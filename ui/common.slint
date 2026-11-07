@@ -295,6 +295,10 @@ export component Combo inherits Rectangle {
     in property <[string]> model;
     in-out property <int> current-index;
     in property <bool> enabled: true;
+    // The printer's driver (PPD) has no such option: off and filled grey,
+    // like a disabled Windows combo box. (A disabled ComboBox with no text
+    // looks like an enabled, empty one.)
+    in property <bool> missing;
     in property <string> tip;
     callback selected;
     height: 21px;
@@ -303,8 +307,14 @@ export component Combo inherits Rectangle {
         height: 100%;
         model: root.model;
         current-index <=> root.current-index;
-        enabled: root.enabled;
+        enabled: root.enabled && !root.missing;
         selected => { root.selected(); }
+    }
+    if root.missing: Rectangle {
+        background: #f4f4f4;
+        border-width: 1px;
+        border-color: #c8c8c8;
+        border-radius: 4px;
     }
     if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
 }

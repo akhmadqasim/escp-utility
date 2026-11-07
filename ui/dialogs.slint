@@ -101,6 +101,7 @@ export component ColorControlsDialog inherits UtilityWindow {
         model: root.color-mode-labels;
         current-index <=> root.color-mode;
         enabled: root.has-color-mode;
+        missing: !root.has-color-mode;
         tip: root.has-color-mode ? "" : Strings.not-in-ppd;
         selected => {
             if (root.vivid) {
@@ -115,6 +116,7 @@ export component ColorControlsDialog inherits UtilityWindow {
         model: root.gamma-labels;
         current-index <=> root.gamma;
         enabled: root.has-gamma && !root.vivid;
+        missing: !root.has-gamma;
         tip: !root.has-gamma ? Strings.not-in-ppd : root.vivid ? Strings.gamma-vivid : "";
     }
     Group { x: 16px; y: 116px; width: 243px; height: 46px; title: "Color Adjustment Method"; page: #f0f0f0; }

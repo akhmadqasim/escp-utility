@@ -82,8 +82,9 @@ pub fn builtin() -> Vec<Profile> {
     parse(include_str!("../profiles.toml")).expect("profiles.toml")
 }
 
-/// The first cleaning is the normal one (ch 0, no confirmation), and each
-/// MDL appears once.
+/// The first cleaning is the normal one (ch 0, no confirmation), no ch
+/// appears twice, each MDL appears once, and windows_family is "G5P" or ""
+/// (a typo would silently give the generic texts and pre-check).
 pub fn lint(profiles: &[Profile]) -> Result<(), String> {
     for (i, p) in profiles.iter().enumerate() {
         if p.mdl.is_empty() {
@@ -91,6 +92,12 @@ pub fn lint(profiles: &[Profile]) -> Result<(), String> {
         }
         if profiles[..i].iter().any(|q| q.mdl == p.mdl) {
             return Err(format!("{}: mdl appears twice", p.mdl));
+        }
+        if !matches!(p.windows_family.as_str(), "" | "G5P") {
+            return Err(format!("{}: windows_family must be \"G5P\" or \"\", not {:?}", p.mdl, p.windows_family));
+        }
+        if p.cleaning.iter().enumerate().any(|(j, c)| p.cleaning[..j].iter().any(|d| d.ch == c.ch)) {
+            return Err(format!("{}: a cleaning ch appears twice", p.mdl));
         }
         match p.cleaning.first() {
             Some(c) if c.ch == 0 => {}
@@ -135,6 +142,9 @@ mod tests {
         assert!(lint(&[one("A", &[0]), one("A", &[0])]).is_err());
         assert!(lint(&[one("A", &[0x10, 0])]).is_err());
         assert!(lint(&[one("A", &[])]).is_err());
+        assert!(lint(&[one("A", &[0, 0x10, 0x10])]).is_err());
+        assert!(lint(&[Profile { windows_family: "g5p".into(), ..one("A", &[0]) }]).is_err());
+        assert!(lint(&[Profile { windows_family: "G5P".into(), ..one("A", &[0]) }]).is_ok());
         assert!(parse("[[printer]]\nmdl = \"A\"\ntested = \"\"\nwindows_family = \"\"\nnc_param = 0\ncleaning = []\nbogus = 1\n").is_err());
     }
 }

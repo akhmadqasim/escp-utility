@@ -11,7 +11,7 @@ use crate::status::{self, QueryError, Status, st2};
 /// Collect and format the report for `queue`.
 pub fn run(queue: &str, profiles: &[Profile]) -> String {
     let ppd = crate::ppd::fetch(queue).and_then(|t| crate::ppd::parse(&t)).ok();
-    let p = Identity::of(queue, ppd.as_ref().and_then(|p| p.device_id.as_deref()));
+    let p = Identity::of(queue, ppd.as_ref().and_then(|p| p.device_id.as_deref()), ppd.as_ref().and_then(|p| p.nickname.as_deref()));
     let nickname = ppd.and_then(|p| p.nickname);
     let options = match std::process::Command::new("lpoptions").env("LC_ALL", "C").args(["-p", queue, "-l"]).output() {
         Ok(o) => format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),
