@@ -36,7 +36,7 @@ as the Windows texts.
 | Power Cleaning | Works, as the second radio option in Head Cleaning, with the transportation-lock warning (dialog 360) |
 | EPSON Status Monitor 3 | Works: status title and message from the Windows status table, approximate levels of the 6 ink tanks, polled every 5 s while open. [Print Queue] opens the GNOME printer settings |
 | Printer and Option Information | Shows what CUPS reports for the queue (`lpstat -l -p/-v/-a/-o`), read-only |
-| Paper Guide Cleaning | Works like Windows on the L800, which is a no-op: pre-check, dialog 265 [Cancel] [**Cleaning**], then the paused/offline re-check, and **no bytes are sent**. Windows looks for its script RCDATA 1900, which does not exist in the L800 data DLL (`E_IHBRG5P`), so `FUN_00407dc4` opens and closes an empty RAW job. Then the dialog closes (rea/NOTES.md §5) |
+| Paper Guide Cleaning | Works like Windows on the L800, which is a no-op: pre-check, dialog 265 [Cancel] [**Cleaning**], then the paused/offline re-check, and **no bytes are sent**. Windows looks for its script RCDATA 1900, which does not exist in the L800 data DLL (`E_IHBRG5P`), so `FUN_00407dc4` opens and closes an empty RAW job. Then the dialog closes (rea/NOTES.md §5). In `--dry-run` a message says so, with any queue note |
 | Driver Update | Opens Epson's L800 Linux download page with `xdg-open`. Windows runs Epson's own updater (`E_GUPA30.EXE`), which has no Linux equivalent |
 | Print Head Alignment | Disabled. Its tooltip says why: it writes permanent calibration values (`DD`/`SV`) to the printer, so it stays off until a test run is approved |
 | Speed & Progress... | Disabled. Its tooltip says why: these are Windows print-spooler settings only. Monitoring Preferences lives inside this dialog on Windows |

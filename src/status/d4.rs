@@ -353,7 +353,7 @@ impl<P: Port> Session<P> {
         let e = self.exit();
         let reply = res?;
         // The reply is good even if closing failed; keep it and log.
-        if let Err(err) = c.and(e) {
+        for err in [c.err(), e.err()].into_iter().flatten() {
             eprintln!("epson-l800-utility: closing the 1284.4 session failed after a good reply: {err}");
         }
         Ok(reply)

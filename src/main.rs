@@ -117,8 +117,11 @@ fn on(f: fn(&Rc<App>)) -> impl Fn() + 'static {
 
 /// Start a desktop program and reap it on a thread when it exits.
 fn launch(program: &str, arg: &str) {
-    if let Ok(mut child) = std::process::Command::new(program).arg(arg).spawn() {
-        std::thread::spawn(move || child.wait());
+    match std::process::Command::new(program).arg(arg).spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait());
+        }
+        Err(e) => eprintln!("epson-l800-utility: cannot start {program}: {e}"),
     }
 }
 
@@ -257,10 +260,11 @@ impl App {
     /// Then the utility ends (message 0x41E closes 265).
     fn paper_guide_cleaning(&self) {
         let _ = self.paper_guide.hide();
-        self.run_job(Utility::PaperGuide, None, |app, res| {
-            if let Err(f) = res {
-                app.show_fail(Utility::PaperGuide, f);
-            }
+        self.run_job(Utility::PaperGuide, None, |app, res| match res {
+            // Live: the utility just ends. Dry run: say so, with any queue note.
+            Ok(sent) if app.dry_run() => app.show_message(Utility::PaperGuide, "Dry run", &app.with_note(&sent.summary), false),
+            Ok(_) => {}
+            Err(f) => app.show_fail(Utility::PaperGuide, f),
         });
     }
 
@@ -326,15 +330,14 @@ impl App {
                     if let (Some(p), Mode::Live) = (&problem, &mode) {
                         return Err(Fail::Plain(format!("{COMM_ERROR}\n\n{p}")));
                     }
-                    let Some((name, bytes)) = job else {
-                        return Ok(Sent { summary: "Nothing to send.".into(), dump: None });
+                    let mut sent = match job {
+                        None => Sent { summary: "Paper Guide Cleaning sends no data on the L800 (Windows sends none either).".into(), dump: None },
+                        Some((name, bytes)) => {
+                            // No status session may be open while CUPS gets the job.
+                            let _device = status::exclusive();
+                            transport::submit(&mode, &queue, name, &bytes).map_err(Fail::Plain)?
+                        }
                     };
-                    // No status session may be open while CUPS gets the job.
-                    let submitted = {
-                        let _device = status::exclusive();
-                        transport::submit(&mode, &queue, name, &bytes)
-                    };
-                    let mut sent = submitted.map_err(Fail::Plain)?;
                     if let Some(p) = problem {
                         sent.summary.push_str(&format!("\nA real run would stop here with a communication error: {p}"));
                     }
