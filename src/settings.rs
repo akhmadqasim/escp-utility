@@ -814,7 +814,9 @@ YellowValue/Yellow: -25 *0 25
     fn std_rejects_out_of_range_dest_values() {
         let s = Std::parse("copies=0 number-up=3 orientation-requested=6 page-border=none");
         assert_eq!(s, Std::default());
-        assert_eq!(Std::parse("copies=10000").copies, 1);
+        for (dest, want) in [("copies=1", 1), ("copies=9999", 9999), ("copies=10000", 1), ("copies=-3", 1), ("copies=x", 1)] {
+            assert_eq!(Std::parse(dest).copies, want, "{dest}");
+        }
         assert!(Std::parse("orientation-requested=5").landscape);
     }
 
@@ -931,13 +933,6 @@ mod constraint_tests {
             assert_eq!(opt(&v, "ReduceEnlarge"), "Off");
             assert_eq!(opt(&v, "ScaleRatio"), "100");
             assert_eq!(opt(&v, "OutputPaper"), "A4");
-        }
-    }
-
-    #[test]
-    fn copies_out_of_range_read_as_one() {
-        for (dest, want) in [("copies=0", 1), ("copies=1", 1), ("copies=9999", 9999), ("copies=10000", 1), ("copies=-3", 1), ("copies=x", 1)] {
-            assert_eq!(Std::parse(dest).copies, want, "{dest}");
         }
     }
 

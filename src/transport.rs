@@ -186,7 +186,7 @@ mod tests {
         let lines: Vec<&str> = dump.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[1].starts_with("00000010  10 11 12 13 41 42"));
-        assert!(lines[1].ends_with("|....AB|") || lines[1].contains("AB"));
+        assert!(lines[1].ends_with("|....AB|"), "{}", lines[1]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

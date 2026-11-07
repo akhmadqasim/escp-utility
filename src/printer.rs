@@ -404,18 +404,7 @@ mod tests {
 
     /// A fake /sys/class/usbmisc: lp0 is another printer, lp3 the L800.
     fn fake_sysfs() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("usbmisc-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        for (lp, serial, id) in [("lp0", "OTHER", "MFG:HP;MDL:X;"), ("lp3", "1234567X8901234567", L800_ID)] {
-            // lpN/device is the USB interface; its parent is the USB device.
-            let usbdev = root.join(format!("{lp}-usbdev"));
-            fs::create_dir_all(usbdev.join("iface")).unwrap();
-            fs::write(usbdev.join("serial"), format!("{serial}\n")).unwrap();
-            fs::write(usbdev.join("iface/ieee1284_id"), id).unwrap();
-            fs::create_dir_all(root.join(lp)).unwrap();
-            std::os::unix::fs::symlink(usbdev.join("iface"), root.join(lp).join("device")).unwrap();
-        }
-        root
+        sysfs_with("l800", &[("lp0", Some("OTHER\n"), "MFG:HP;MDL:X;"), ("lp3", Some("1234567X8901234567\n"), L800_ID)])
     }
 
     #[test]
@@ -446,12 +435,13 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// A fake usbmisc tree under its own name: (lpN, USB serial or None, ID).
+    /// A fake /sys/class/usbmisc under its own name: (lpN, USB serial or None, ID).
     fn sysfs_with(tag: &str, devs: &[(&str, Option<&str>, &str)]) -> PathBuf {
         let root = std::env::temp_dir().join(format!("usbmisc-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         for (lp, serial, id) in devs {
+            // lpN/device is the USB interface; its parent is the USB device.
             let usbdev = root.join(format!("{lp}-usbdev"));
             fs::create_dir_all(usbdev.join("iface")).unwrap();
             if let Some(s) = serial {

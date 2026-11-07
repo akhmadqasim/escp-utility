@@ -1875,16 +1875,6 @@ mod e2e_ui {
         }
     }
 
-    fn hex_golden(job: &str) -> Vec<u8> {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/L800/").to_string() + job + ".hex";
-        std::fs::read_to_string(path)
-            .unwrap()
-            .lines()
-            .filter(|l| !l.starts_with('#'))
-            .flat_map(|l| l.split_whitespace().map(|b| u8::from_str_radix(b, 16).unwrap()).collect::<Vec<_>>())
-            .collect()
-    }
-
     /// The 7 clock bytes of the TI command are zeroed.
     fn mask_ti(mut b: Vec<u8>) -> Vec<u8> {
         let i = b.windows(5).position(|w| w == b"TI\x08\x00\x00").expect("TI") + 5;
@@ -1892,16 +1882,13 @@ mod e2e_ui {
         b
     }
 
-    /// The single dump file for `job` in `dir`.
-    fn dump(dir: &Path, job: &str) -> Vec<u8> {
-        let files: Vec<PathBuf> = std::fs::read_dir(dir)
-            .unwrap()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with(&format!("{job}-")))
-            .collect();
-        assert_eq!(files.len(), 1, "{job} dumps in {}: {files:?}", dir.display());
-        std::fs::read(&files[0]).unwrap()
+    /// `dir` holds one dump, and it is the L800 golden of `job` but for the clock.
+    fn assert_dump(dir: &Path, job: &str) {
+        let files: Vec<PathBuf> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+        assert_eq!(files.len(), 1, "{job}: dumps in {}: {files:?}", dir.display());
+        assert!(files[0].file_name().unwrap().to_string_lossy().starts_with(&format!("{job}-")), "{files:?}");
+        let golden = commands::tests::golden(&Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/golden/L800/{job}.hex")));
+        assert_eq!(mask_ti(std::fs::read(&files[0]).unwrap()), mask_ti(golden), "{job}");
     }
 
     fn l800_app(dir: &Path) -> Rc<App> {
@@ -1941,7 +1928,7 @@ mod e2e_ui {
         assert!(shown(&app.dump), "dry run shows the hexdump");
         app.nozzle_result.invoke_finish();
         assert!(!shown(&app.nozzle_result));
-        assert_eq!(mask_ti(dump(&dir, "nozzle-check")), mask_ti(hex_golden("nozzle-check")));
+        assert_dump(&dir, "nozzle-check");
         app.close(&app.dump);
 
         // Head Cleaning, normal (kind 0): no 360, straight to the job.
@@ -1954,7 +1941,7 @@ mod e2e_ui {
         assert!(!shown(&app.power), "normal cleaning needs no confirmation");
         pump_until("cleaning done", || shown(&app.cleaning_done));
         assert!(!shown(&app.progress), "dry run: no progress polling");
-        assert_eq!(mask_ti(dump(&dir2, "head-cleaning-00")), mask_ti(hex_golden("head-cleaning-00")));
+        assert_dump(&dir2, "head-cleaning-00");
         app.cleaning_done.invoke_finish();
         app.close(&app.dump);
 
@@ -1972,8 +1959,7 @@ mod e2e_ui {
         app.cleaning.invoke_start();
         app.power.invoke_ok();
         pump_until("cleaning done", || shown(&app.cleaning_done));
-        assert!(std::fs::read_dir(&dir3).unwrap().count() == 1, "one job only");
-        assert_eq!(mask_ti(dump(&dir3, "head-cleaning-10")), mask_ti(hex_golden("head-cleaning-10")));
+        assert_dump(&dir3, "head-cleaning-10");
         app.cleaning_done.invoke_finish();
         app.close(&app.dump);
 

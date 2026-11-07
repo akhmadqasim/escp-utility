@@ -11,7 +11,7 @@
 //! (`CD<2F>DVD`) are decoded. A selection holds one choice per option, as
 //! `lpoptions -o key=value` stores it.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -295,8 +295,8 @@ impl Ppd {
     /// the conflict stays. Same input, same output.
     pub fn resolve(&self, sel: &Selection, edited: Option<&str>) -> Selection {
         let is_edited = |o: &&PpdOption| Some(o.keyword.as_str()) == edited;
-        let order: Vec<&PpdOption> =
-            self.options.iter().filter(is_edited).chain(self.options.iter().filter(|o| !is_edited(o))).filter(|o| !o.choices.is_empty()).collect();
+        let mut order: Vec<&PpdOption> = self.options.iter().filter(|o| !o.choices.is_empty()).collect();
+        order.sort_by_key(|o| !is_edited(o));
         let candidates: Vec<Vec<&str>> = order
             .iter()
             .map(|o| {
@@ -305,33 +305,28 @@ impl Ppd {
                 if is_edited(o) && wanted.is_some() {
                     return wanted.into_iter().collect();
                 }
-                let mut v: Vec<&str> = Vec::new();
-                for c in wanted.into_iter().chain(o.default.as_deref().filter(valid)).chain(o.choices.iter().map(|c| c.keyword.as_str())) {
-                    if !v.contains(&c) {
-                        v.push(c);
-                    }
-                }
-                v
+                let mut seen = HashSet::new();
+                let all = o.choices.iter().map(|c| c.keyword.as_str());
+                wanted.into_iter().chain(o.default.as_deref().filter(valid)).chain(all).filter(|c| seen.insert(*c)).collect()
             })
             .collect();
-        let index: HashMap<&str, usize> = order.iter().enumerate().map(|(i, o)| (o.keyword.as_str(), i)).collect();
         let mut picks = Vec::with_capacity(order.len());
-        if self.settle(&order, &index, &candidates, &mut picks).is_err() {
+        if self.settle(&order, &candidates, &mut picks).is_err() {
             for (o, c) in order.iter().zip(&candidates) {
-                let fits = |k: &&str| self.culprit(&index, &picks, &o.keyword, k).is_none();
+                let fits = |k: &&str| self.culprit(&order, &picks, &o.keyword, k).is_none();
                 picks.push(c.iter().copied().find(fits).unwrap_or(c[0]));
             }
         }
         order.iter().zip(picks).map(|(o, c)| (o.keyword.clone(), c.to_string())).collect()
     }
 
-    /// The first of the options settled so far (`picks`, positions from
-    /// `index`) whose value conflicts with `option=choice`.
-    fn culprit(&self, index: &HashMap<&str, usize>, picks: &[&str], option: &str, choice: &str) -> Option<usize> {
+    /// The first of the options settled so far (`picks`, the values of
+    /// `order[..picks.len()]`) whose value conflicts with `option=choice`.
+    fn culprit(&self, order: &[&PpdOption], picks: &[&str], option: &str, choice: &str) -> Option<usize> {
         self.constraints
             .iter()
             .filter_map(|k| k.partner(option, choice))
-            .filter_map(|(p, pc)| index.get(p).copied().filter(|&j| j < picks.len() && picks[j] == pc))
+            .filter_map(|(p, pc)| (0..picks.len()).find(|&j| order[j].keyword == p && picks[j] == pc))
             .min()
     }
 
@@ -340,28 +335,22 @@ impl Ppd {
     /// `order`, or returns the settled options to blame for the dead end. A
     /// dead end the current option is not to blame for goes straight back
     /// past it, so options unrelated to a conflict are never retried.
-    fn settle<'a>(
-        &self,
-        order: &[&PpdOption],
-        index: &HashMap<&str, usize>,
-        candidates: &[Vec<&'a str>],
-        picks: &mut Vec<&'a str>,
-    ) -> Result<(), BTreeSet<usize>> {
+    fn settle<'a>(&self, order: &[&PpdOption], candidates: &[Vec<&'a str>], picks: &mut Vec<&'a str>) -> Result<(), BTreeSet<usize>> {
         let i = picks.len();
         let Some(o) = order.get(i) else { return Ok(()) };
         let mut blame = BTreeSet::new();
         for &c in &candidates[i] {
-            if let Some(j) = self.culprit(index, picks, &o.keyword, c) {
+            if let Some(j) = self.culprit(order, picks, &o.keyword, c) {
                 blame.insert(j);
                 continue;
             }
             picks.push(c);
-            let Err(b) = self.settle(order, index, candidates, picks) else { return Ok(()) };
+            let Err(mut b) = self.settle(order, candidates, picks) else { return Ok(()) };
             picks.truncate(i);
-            if !b.contains(&i) {
+            if !b.remove(&i) {
                 return Err(b);
             }
-            blame.extend(b.into_iter().filter(|&j| j != i));
+            blame.append(&mut b);
         }
         Err(blame)
     }
@@ -473,6 +462,9 @@ mod tests {
         choices.iter().map(|c| c.keyword.clone()).collect()
     }
 
+    /// The header every test PPD starts with.
+    const H: &str = "*PPD-Adobe: \"4.3\"\n";
+
     const SYNTAX: &str = r#"*PPD-Adobe: "4.3"
 *% Comment that mentions *OpenUI *Fake/Fake: PickOne
 *NickName: "Mini Printer, Test Driver"
@@ -548,23 +540,20 @@ setpagedevice"
 
     #[test]
     fn structural_errors() {
-        let h = "*PPD-Adobe: \"4.3\"\n";
         let cases = [
             ("<html>404</html>".to_string(), "not a PPD"),
-            (format!("{h}*OpenUI *A: PickOne\n*OpenUI *B: PickOne\n"), "line 3: *OpenUI inside *OpenUI *A"),
-            (format!("{h}*OpenUI *A: PickOne\n*CloseUI: *B\n"), "line 3: *CloseUI: *B closes no open option"),
-            (format!("{h}*CloseUI: *A\n"), "line 2: *CloseUI: *A closes no open option"),
-            (format!("{h}*OpenUI *A: PickOne\n*A X: \"\"\n"), "*OpenUI *A never closed"),
-            (format!("{h}*OpenUI *A: PickSome\n"), "line 2: unknown UI type \"PickSome\""),
-            (format!("{h}*Foo: \"open\nstill open\n"), "line 2: quoted value never closed"),
+            (format!("{H}*OpenUI *A: PickOne\n*OpenUI *B: PickOne\n"), "line 3: *OpenUI inside *OpenUI *A"),
+            (format!("{H}*OpenUI *A: PickOne\n*CloseUI: *B\n"), "line 3: *CloseUI: *B closes no open option"),
+            (format!("{H}*CloseUI: *A\n"), "line 2: *CloseUI: *A closes no open option"),
+            (format!("{H}*OpenUI *A: PickOne\n*A X: \"\"\n"), "*OpenUI *A never closed"),
+            (format!("{H}*OpenUI *A: PickSome\n"), "line 2: unknown UI type \"PickSome\""),
+            (format!("{H}*Foo: \"open\nstill open\n"), "line 2: quoted value never closed"),
         ];
         for (text, want) in cases {
             let e = parse(&text).unwrap_err();
             assert!(e.contains(want), "{e:?} lacks {want:?}");
         }
     }
-
-    const H: &str = "*PPD-Adobe: \"4.3\"\n";
 
     #[test]
     fn error_line_numbers_count_lines_inside_quoted_values() {
@@ -818,7 +807,7 @@ setpagedevice"
     /// through the free ones in between (10^10 combinations here).
     #[test]
     fn resolve_skips_free_options_on_a_dead_end() {
-        let mut text = String::from("*PPD-Adobe: \"4.3\"\n*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*X x1: \"\"\n*CloseUI: *X\n");
+        let mut text = format!("{H}*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*X x1: \"\"\n*CloseUI: *X\n");
         for n in 0..10 {
             text += &format!("*OpenUI *F{n}: PickOne\n");
             for c in 0..10 {
@@ -868,10 +857,9 @@ setpagedevice"
 
     #[test]
     fn resolve_edge_fallbacks() {
-        let h = "*PPD-Adobe: \"4.3\"\n";
         // Default names no choice: first allowed choice instead.
         let p = parse(&format!(
-            "{h}*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*DefaultX: x1\n*X x1: \"\"\n*CloseUI: *X\n\
+            "{H}*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*DefaultX: x1\n*X x1: \"\"\n*CloseUI: *X\n\
              *OpenUI *Y: PickOne\n*DefaultY: Missing\n*Y y1: \"\"\n*Y y2: \"\"\n*CloseUI: *Y\n"
         ))
         .unwrap();
@@ -880,7 +868,7 @@ setpagedevice"
         assert_eq!(p.resolve(&sel(&[("Y", "nope")]), Some("X")), sel(&[("X", "x1"), ("Y", "y2")]));
         // Unsatisfiable: Y's only choice conflicts; it keeps its value, the conflict stays.
         let q = parse(&format!(
-            "{h}*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*DefaultX: x1\n*X x1: \"\"\n*CloseUI: *X\n\
+            "{H}*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*DefaultX: x1\n*X x1: \"\"\n*CloseUI: *X\n\
              *OpenUI *Y: PickOne\n*DefaultY: y1\n*Y y1: \"\"\n*CloseUI: *Y\n"
         ))
         .unwrap();
@@ -889,7 +877,7 @@ setpagedevice"
         assert_eq!(q.conflicts(&out).len(), 1);
         assert!(q.allowed_choices("Y", &out).is_empty());
         // An option with no choices is left out.
-        let e = parse(&format!("{h}*OpenUI *E: PickOne\n*DefaultE: z\n*CloseUI: *E\n")).unwrap();
+        let e = parse(&format!("{H}*OpenUI *E: PickOne\n*DefaultE: z\n*CloseUI: *E\n")).unwrap();
         assert!(e.resolve(&sel(&[("E", "z")]), Some("E")).is_empty());
     }
 

@@ -172,7 +172,7 @@ pub fn hexdump(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const TS: Timestamp = Timestamp { year: 2026, month: 11, day: 7, hour: 14, minute: 5, second: 9 };
@@ -201,7 +201,8 @@ mod tests {
         head_cleaning_job(ch, ts)
     }
 
-    fn golden(path: &std::path::Path) -> Vec<u8> {
+    /// The bytes of a `.hex` golden (`#` lines are comments).
+    pub(crate) fn golden(path: &std::path::Path) -> Vec<u8> {
         hex(&std::fs::read_to_string(path).unwrap().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join(" "))
     }
 

@@ -25,7 +25,6 @@ impl Shim {
         fs::create_dir_all(dir.join("home")).unwrap();
         fs::write(dir.join("lpstat_v"), lpstat_v).unwrap();
         fs::write(dir.join("jobs"), jobs).unwrap();
-        let log = dir.join("log");
         let d = dir.display();
         let lpstat = format!(
             "#!/bin/sh\necho \"lpstat $*\" >> {d}/log\ncase \"$1\" in\n  -v) cat {d}/lpstat_v ;;\n  -o) cat {d}/jobs ;;\nesac\nexit 0\n"
@@ -39,7 +38,6 @@ impl Shim {
             fs::write(&p, body).unwrap();
             fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let _ = log;
         Shim { dir }
     }
 

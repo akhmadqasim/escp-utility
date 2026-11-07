@@ -100,17 +100,20 @@ fn fake_usblp_silent_on_enter_times_out_without_exit() {
     let (master, node) = pty();
     let (writes, h) = fake_printer(master, vec![]);
 
+    // query_node's session with a short timeout (it waits 2 s, then 4 s).
     let t = Instant::now();
-    let res = query_node(&node);
+    let res = {
+        let mut s = d4::Session::new(usblp::UsbLp::open(&node).unwrap());
+        s.timeout = Duration::from_millis(50);
+        s.query()
+    };
     let took = t.elapsed();
     h.join().unwrap();
 
-    match res {
-        Err(QueryError::Failed(m)) => assert!(m.contains("EnterIEEE"), "{m}"),
-        other => panic!("{other:?}"),
-    }
-    // Drain (0.2 s), Enter (2 s), one retry (4 s).
-    assert!(took >= Duration::from_secs(6) && took < Duration::from_secs(10), "{took:?}");
+    let e = res.unwrap_err().to_string();
+    assert!(e.contains("EnterIEEE"), "{e}");
+    // Drain (0.2 s), Enter (50 ms), one retry (100 ms).
+    assert!(took >= Duration::from_millis(350) && took < Duration::from_secs(2), "{took:?}");
     // Only Enter went out: no Init, no Exit (7 bytes of print data otherwise).
     let w = writes.lock().unwrap();
     assert!(!w.is_empty());
