@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=ESC/P Utility
+GenericName=Printer Maintenance
+Comment=Printing Preferences and maintenance for Epson inkjet printers (layout of the Windows driver)
+Exec=escp-utility --utility
+Icon=escp-utility
+Terminal=false
+Categories=Settings;HardwareSettings;Printing;
+Keywords=Epson;printer;inkjet;nozzle;cleaning;ink;preferences;
+StartupWMClass=escp-utility
+Actions=preferences;dry-run;
+
+[Desktop Action preferences]
+Name=Printing Preferences
+Exec=escp-utility
+
+[Desktop Action dry-run]
+Name=Dry Run (nothing is sent or saved)
+Exec=escp-utility --utility --dry-run

@@ -1,8 +1,10 @@
 [package]
-name = "epson-l800-utility"
+name = "escp-utility"
 version = "0.1.0"
 edition = "2024"
-description = "Linux maintenance utility for the Epson L800, laid out like the Windows driver's Maintenance tab"
+description = "Printing Preferences and maintenance (nozzle check, head cleaning, status) for Epson inkjet printers on Linux, laid out like the Windows driver"
+license = "MIT"
+readme = "README.md"
 publish = false
 
 [dependencies]

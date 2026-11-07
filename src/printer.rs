@@ -106,7 +106,7 @@ pub fn queues(queue: Option<&str>) -> Vec<Queue> {
     match cmd.output() {
         Ok(o) => parse_lpstat_v(&String::from_utf8_lossy(&o.stdout)),
         Err(e) => {
-            eprintln!("epson-l800-utility: cannot run lpstat: {e}");
+            eprintln!("escp-utility: cannot run lpstat: {e}");
             vec![]
         }
     }

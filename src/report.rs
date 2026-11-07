@@ -27,7 +27,7 @@ fn printer_profile<'a>(profiles: &'a [Profile], p: &Identity) -> Option<&'a Prof
 }
 
 fn format(p: &Identity, profile: Option<&Profile>, nickname: Option<&str>, options: &str, reply: Result<Vec<u8>, QueryError>) -> String {
-    let mut s = format!("epson-l800-utility {} report\n\nQueue: {}\n", env!("CARGO_PKG_VERSION"), p.queue);
+    let mut s = format!("escp-utility {} report\n\nQueue: {}\n", env!("CARGO_PKG_VERSION"), p.queue);
     s.push_str(&p.summary());
     s.push_str(&profile.cloned().unwrap_or_else(Profile::generic).summary());
     s.push_str(&format!("PPD NickName: {}\n\n$ lpoptions -p {} -l\n{options}\n", nickname.unwrap_or("(none)"), p.queue));

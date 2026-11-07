@@ -910,19 +910,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "epson-l800-utility"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "fontique",
- "libc",
- "serde",
- "slint",
- "slint-build",
- "toml",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -943,6 +930,19 @@ name = "error-code"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
+
+[[package]]
+name = "escp-utility"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "fontique",
+ "libc",
+ "serde",
+ "slint",
+ "slint-build",
+ "toml",
+]
 
 [[package]]
 name = "euclid"

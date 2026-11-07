@@ -25,14 +25,14 @@ pub struct Sent {
     pub dump: Option<(PathBuf, String)>,
 }
 
-/// Default dry-run directory: `$XDG_CACHE_HOME/epson-l800-utility`, or `~/.cache/epson-l800-utility`.
+/// Default dry-run directory: `$XDG_CACHE_HOME/escp-utility`, or `~/.cache/escp-utility`.
 pub fn default_dump_dir() -> PathBuf {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
         .unwrap_or_else(std::env::temp_dir);
-    base.join("epson-l800-utility")
+    base.join("escp-utility")
 }
 
 /// Submit `bytes` as one raw job. `name` is a short slug such as "nozzle-check".

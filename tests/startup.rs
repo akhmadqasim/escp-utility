@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 #[test]
 #[ignore = "opens a window; needs WAYLAND_DISPLAY or DISPLAY"]
 fn app_starts_and_stays_up() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_epson-l800-utility"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_escp-utility"))
         .args(["--dry-run", "--utility", "--queue", "NO_SUCH_QUEUE_SMOKE_TEST"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

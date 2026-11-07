@@ -1,4 +1,5 @@
-//! Linux clone of the Windows Epson L800 driver's Maintenance tab.
+//! escp-utility: Printing Preferences and maintenance for Epson inkjet
+//! printers on Linux, laid out like the Windows Epson L800 driver.
 //!
 //! The flows follow the Windows utility (E_IHUTG5P.DLL). With a status reply
 //! it takes the status path (pre-check, dialog 220, progress 223, finish 224).
@@ -48,7 +49,7 @@ fn driver_page(mdl: Option<&str>) -> String {
 const L800_NICKNAME: &str = "Epson L800 Series - epson-inkjet-printer";
 
 /// Wayland app_id / X11 WM_CLASS; matches the desktop file and icon name.
-const APP_ID: &str = "epson-l800-utility";
+const APP_ID: &str = "escp-utility";
 
 /// The "Please wait..." popup stays up at least this long, so it does not just flicker.
 const MIN_WAIT: Duration = Duration::from_millis(700);
@@ -129,7 +130,7 @@ fn launch(program: &str, arg: &str) {
         Ok(mut child) => {
             std::thread::spawn(move || child.wait());
         }
-        Err(e) => eprintln!("epson-l800-utility: cannot start {program}: {e}"),
+        Err(e) => eprintln!("escp-utility: cannot start {program}: {e}"),
     }
 }
 
@@ -197,7 +198,7 @@ where
             if let Some(c) = weak.upgrade()
                 && let Err(e) = c.window().dispatch_event_with_result(slint::platform::WindowEvent::CloseRequested)
             {
-                eprintln!("epson-l800-utility: cannot close the window: {e}");
+                eprintln!("escp-utility: cannot close the window: {e}");
             }
         });
     });
@@ -253,7 +254,7 @@ struct PpdState {
     /// What the pages show for `sel`.
     view: RefCell<ppd_sheet::View>,
     /// The selection when Printer Options opened: its Cancel restores it.
-    before: RefCell<Option<ppd::Selection>>,
+    before: RefCell<Option<(ppd::Selection, bool)>>,
 }
 
 struct App {
@@ -534,7 +535,8 @@ impl App {
                 self.open(d);
             }
             "printer-options" => {
-                *st.before.borrow_mut() = Some(st.sel.borrow().clone());
+                // With Apply's state, which Cancel restores too.
+                *st.before.borrow_mut() = Some((st.sel.borrow().clone(), self.main.global::<Prefs>().get_dirty()));
                 self.printer_options.set_rows(slint::VecModel::from_slice(&ppd_sheet::option_rows(&v)));
                 self.open(&self.printer_options);
             }
@@ -542,12 +544,14 @@ impl App {
         }
     }
 
-    /// Printer Options [Cancel] or close box: undo its picks.
+    /// Printer Options [Cancel] or close box: undo its picks, and Apply's
+    /// state with them.
     fn printer_options_cancel(&self) {
         if let Some(st) = &self.ppd
-            && let Some(sel) = st.before.borrow_mut().take()
+            && let Some((sel, dirty)) = st.before.borrow_mut().take()
         {
             self.ppd_set(st, sel);
+            self.main.global::<Prefs>().set_dirty(dirty);
         }
         self.close(&self.printer_options);
     }
@@ -1149,13 +1153,13 @@ struct Args {
     report: bool,
 }
 
-const USAGE: &str = "Usage: epson-l800-utility [--utility] [--dry-run] [--dump-dir DIR] [--queue NAME] [--profile FILE]
-       epson-l800-utility --report [--queue NAME] [--profile FILE]
+const USAGE: &str = "Usage: escp-utility [--utility] [--dry-run] [--dump-dir DIR] [--queue NAME] [--profile FILE]
+       escp-utility --report [--queue NAME] [--profile FILE]
 
   --utility       open on the Maintenance tab (default: Main)
   --dry-run       write each job to a file and show a hexdump; never calls lp,
                   and show the lpoptions command instead of saving settings
-  --dump-dir DIR  folder for dry-run files (default: ~/.cache/epson-l800-utility)
+  --dump-dir DIR  folder for dry-run files (default: ~/.cache/escp-utility)
   --queue NAME    CUPS queue of the printer (default: the only Epson queue;
                   with several, a list to choose from)
   --profile FILE  maintenance profiles in the profiles.toml format; they
@@ -1186,7 +1190,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
                 std::process::exit(0);
             }
             "-V" | "--version" => {
-                println!("epson-l800-utility {}", env!("CARGO_PKG_VERSION"));
+                println!("escp-utility {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument: {other}\n\n{USAGE}")),
@@ -1237,7 +1241,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // would (SLINT_BACKEND is honoured).
     slint::BackendSelector::new().select()?;
     // The Wayland app_id (X11 WM_CLASS) of every window: GNOME matches it to
-    // epson-l800-utility.desktop (StartupWMClass), so the sheet and its
+    // escp-utility.desktop (StartupWMClass), so the sheet and its
     // dialogs group as one app with our icon. Must be set before any window
     // is shown (the winit windows are created on show).
     slint::set_xdg_app_id(APP_ID)?;
@@ -1250,7 +1254,7 @@ fn main() -> Result<(), slint::PlatformError> {
     };
     // The queue's PPD from cupsd (read-only): the sheet, and the device ID
     // when no USB one is cached.
-    let ppd = ppd::fetch(&queue).and_then(|t| ppd::parse(&t)).inspect_err(|e| eprintln!("epson-l800-utility: {e}")).ok();
+    let ppd = ppd::fetch(&queue).and_then(|t| ppd::parse(&t)).inspect_err(|e| eprintln!("escp-utility: {e}")).ok();
     let printer = Identity::of(&queue, ppd.as_ref().and_then(|p| p.device_id.as_deref()), ppd.as_ref().and_then(|p| p.nickname.as_deref()));
     let profile = profile::find(&profiles, printer.id.mdl()).cloned();
     let sheet = match ppd {
@@ -1279,7 +1283,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 ppd_sheet::show_std(&app.main.global::<Prefs>(), &ppd_sheet::Std::parse(&dest));
             }
             (Ok((listing, dest)), None) => app.set_prefs(&Values::parse(&listing, &dest)),
-            (Err(e), _) => eprintln!("epson-l800-utility: cannot read the printing preferences: {e}"),
+            (Err(e), _) => eprintln!("escp-utility: cannot read the printing preferences: {e}"),
         }
     });
     // The Ink Levels boxes on Main and Shortcuts: one status query when the
@@ -1359,9 +1363,11 @@ fn wire(ui: &App) {
     // OK = save + close, Apply = save, Cancel (or the close box) = discard.
     ui.main.on_ok(on(|a| a.save_prefs(true)));
     ui.main.on_apply(on(|a| a.save_prefs(false)));
-    ui.main.on_cancel(|| {
+    ui.main.on_cancel(on(|a| {
+        // Nothing is saved: Apply goes off while the app shuts down.
+        a.main.global::<Prefs>().set_dirty(false);
         let _ = slint::quit_event_loop();
-    });
+    }));
     ui.main.window().on_close_requested(|| {
         let _ = slint::quit_event_loop();
         slint::CloseRequestResponse::HideWindow
@@ -1707,6 +1713,28 @@ mod tests {
         let shown = app.dump.get_content().to_string();
         assert!(shown.contains("MediaType=PLAIN_HIGH") && shown.contains("Ink=MONO") && shown.contains("copies=2"), "{shown}");
         assert!(!shown.contains("PageRegion"));
+    }
+
+    /// Printer Options [Cancel] undoes its picks and Apply's state.
+    #[test]
+    fn printer_options_cancel_restores_apply() {
+        let Ok(dir) = std::env::var("ESCPR_PPD_DIR") else { return eprintln!("ESCPR_PPD_DIR unset: skipped") };
+        let text = std::fs::read_to_string(PathBuf::from(dir).join("Epson-ET-2750_Series-epson-escpr-en.ppd")).unwrap();
+        let _ = slint::platform::set_platform(Box::new(Headless));
+        let sheet = Some(ppd_sheet::Sheet::new(ppd::parse(&text).unwrap()));
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "ET".into(), ..Default::default() }, None, sheet).unwrap();
+        let p = app.main.global::<Prefs>();
+        let st = app.ppd.as_ref().unwrap();
+        app.ppd_set(st, st.sheet.defaults());
+        assert!(!p.get_dirty());
+        app.open_dialog("printer-options");
+        // What the dialog's pick does: Duplex, long edge.
+        let e = st.sheet.option_pick(&st.view.borrow(), 0, 1).unwrap();
+        app.ppd_edit(st, &e);
+        app.touched();
+        assert_eq!((st.sel.borrow()["Duplex"].as_str(), p.get_dirty()), ("DuplexNoTumble", true));
+        app.printer_options_cancel();
+        assert_eq!((st.sel.borrow()["Duplex"].as_str(), p.get_dirty()), ("None", false));
     }
 
     fn args(v: &[&str]) -> Result<Args, String> {

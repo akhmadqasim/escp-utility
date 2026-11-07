@@ -324,7 +324,7 @@ export component AdvancedPage inherits Rectangle {
 
     Group { x: 8px; y: 209px; width: 210px; height: 159px; title: "Print Options"; }
     CheckBox { x: 16px; y: 230px; width: 105px; height: 13px; text: "Fix Red-Eye"; enabled: false; tip: Strings.no-linux; }
-    CheckBox { x: 16px; y: 252px; width: 105px; height: 13px; text: "High Speed"; enabled: false; tip: "No Linux option: the L800 filter chooses the print direction for each quality."; }
+    CheckBox { x: 16px; y: 252px; width: 105px; height: 13px; text: "High Speed"; enabled: false; tip: "No Linux option: the CUPS filter chooses the print direction for each quality."; }
     CheckBox { x: 16px; y: 274px; width: 105px; height: 13px; text: "Edge Smoothing"; enabled: false; tip: Strings.no-linux; }
     CheckBox { x: 16px; y: 296px; width: 105px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
     // 3115 Grayscale: the L800's only colour switch (PPD Color=Grayscale).
@@ -465,8 +465,8 @@ export component PageLayoutPage inherits Rectangle {
     // The PPD's watermark data paths (*epcgWatermarkData) point at
     // /home/epson/projects/..., which does not exist, so the filter cannot
     // draw watermarks (SETTINGS.md): shown, but off.
-    Combo { x: 16px; y: 309px; width: 194px; model: ["None", "Confidential", "Draft", "Urgent", "Priority", "Hot", "Do Not Copy", "For Your Eyes Only", "Review Copy", "Top Secret", "Duplicate"]; current-index: 0; enabled: false; tip: "Off: the installed L800 driver points at watermark files that do not exist, so watermarks would not print."; }
-    DlgButton { x: 16px; y: 342px; width: 84px; height: 23px; text: "Add/Del..."; enabled: false; tip: "No Linux option: the L800 driver has only the ten built-in watermarks."; }
+    Combo { x: 16px; y: 309px; width: 194px; model: ["None", "Confidential", "Draft", "Urgent", "Priority", "Hot", "Do Not Copy", "For Your Eyes Only", "Review Copy", "Top Secret", "Duplicate"]; current-index: 0; enabled: false; tip: Prefs.ppd-mode ? Strings.not-in-ppd : "Off: the installed L800 driver points at watermark files that do not exist, so watermarks would not print."; }
+    DlgButton { x: 16px; y: 342px; width: 84px; height: 23px; text: "Add/Del..."; enabled: false; tip: Prefs.ppd-mode ? Strings.not-in-ppd : "No Linux option: the L800 driver has only the ten built-in watermarks."; }
     DlgButton { x: 106px; y: 342px; width: 84px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("watermark"); } }
 
     Group { x: 224px; y: 8px; width: 211px; height: 71px; title: "2-sided printing"; }
@@ -485,7 +485,7 @@ export component PageLayoutPage inherits Rectangle {
 
     Group { x: 224px; y: 184px; width: 211px; height: 122px; title: "Borderless"; }
     DlgText { x: 232px; y: 205px; width: 131px; height: 13px; text: "Enlargement Method"; wrap: no-wrap; color: #8a8a8a; }
-    Combo { x: 232px; y: 222px; width: 195px; model: ["Auto Expand", "Retain Size"]; current-index: 0; enabled: false; tip: "No Linux option: the L800 PPD has no borderless expansion control."; }
+    Combo { x: 232px; y: 222px; width: 195px; model: ["Auto Expand", "Retain Size"]; current-index: 0; enabled: false; tip: Prefs.ppd-mode ? Strings.not-in-ppd : "No Linux option: the L800 PPD has no borderless expansion control."; }
     DlgText { x: 232px; y: 260px; width: 50px; height: 13px; text: "Expansion"; wrap: no-wrap; color: #8a8a8a; }
     Slider { x: 288px; y: 249px; width: 139px; height: 36px; minimum: 0; maximum: 2; value: 2; enabled: false; }
     DlgText { x: 288px; y: 285px; width: 23px; height: 13px; text: "Min"; color: #8a8a8a; }
