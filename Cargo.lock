@@ -916,8 +916,10 @@ dependencies = [
  "chrono",
  "fontique",
  "libc",
+ "serde",
  "slint",
  "slint-build",
+ "toml",
 ]
 
 [[package]]

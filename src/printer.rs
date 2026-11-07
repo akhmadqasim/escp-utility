@@ -288,19 +288,13 @@ impl Identity {
         };
         let yes = |b: bool| if b { "yes" } else { "no" };
         format!(
-            "Make and model: {}\nDevice URI: {}\nIEEE 1284 device ID (from {source}): {}\nMaintenance jobs: {}\nStatus channel (D4): {}\n",
+            "Make and model: {}\nDevice URI: {}\nIEEE 1284 device ID (from {source}): {}\nEpson ESC/P (CMD ESCPL2 or ESCPR): {}\nStatus channel (CMD D4): {}\n",
             self.make_model,
             self.uri,
             self.id.raw,
-            yes(self.maintenance()),
+            yes(self.id.maintenance()),
             yes(self.id.status()),
         )
-    }
-
-    /// Nozzle Check and Head Cleaning may be offered. The L800 also when
-    /// its ID came without CMD (printer off at start), as before.
-    pub fn maintenance(&self) -> bool {
-        self.id.maintenance() || self.id.mdl() == Some("L800")
     }
 
     /// The usblp node for the status request: the printer is connected now
@@ -419,18 +413,18 @@ mod tests {
         let i = Identity::from_parts("L800", uri, "Epson L800 Series".into(), &root, || panic!("no PPD needed"));
         assert_eq!(i.source, Source::Usb);
         assert_eq!(i.id.raw, L800_ID);
-        assert!(i.maintenance());
+        assert!(i.id.maintenance());
         assert_eq!(i.status_node_in(&root), Some(PathBuf::from("/dev/usb/lp3")));
         // Unplugged: the URI still names the model, but there is no node.
         let i = Identity::from_parts("L800", "usb://EPSON/L800?serial=GONE".into(), String::new(), &root, || None);
-        assert_eq!(i.source, Source::Uri);
-        assert!(i.maintenance());
+        assert_eq!((i.source, i.id.mdl()), (Source::Uri, Some("L800")));
+        assert!(!i.id.maintenance(), "no CMD: only a profile allows maintenance");
         assert_eq!(i.status_node_in(&root), None);
         // A network queue: the PPD's ID, no node.
         let ppd = || Some("*1284DeviceID: \"MFG:EPSON;MDL:ET-2750 Series;\"\n".to_string());
         let i = Identity::from_parts("ET", "ipp://10.0.0.5/ipp/print".into(), String::new(), &root, ppd);
         assert_eq!((i.source, i.id.mdl()), (Source::Ppd, Some("ET-2750 Series")));
-        assert!(!i.maintenance());
+        assert!(!i.id.maintenance());
         assert_eq!(i.status_node_in(&root), None);
         fs::remove_dir_all(root).unwrap();
     }

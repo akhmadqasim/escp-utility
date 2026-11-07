@@ -7,6 +7,7 @@
 mod commands;
 mod layouts;
 mod printer;
+mod profile;
 mod settings;
 mod status;
 mod texts;
@@ -21,8 +22,9 @@ use slint::{ComponentHandle, Timer, TimerMode};
 
 slint::include_modules!();
 
-use commands::{Cleaning, Timestamp};
+use commands::Timestamp;
 use printer::Identity;
+use profile::Profile;
 use settings::Values;
 use status::{CleaningMonitor, Precheck, QueryError, Status, Step};
 use texts::*;
@@ -233,6 +235,10 @@ struct App {
     mode: Mode,
     /// The queue and the printer behind it.
     printer: Identity,
+    /// Its profile, or the generic one.
+    profile: Profile,
+    /// A profile matched the printer's MDL.
+    profiled: bool,
     main: MainWindow,
     wait: Lazy<WaitDialog>,
     nozzle: Lazy<NozzleCheckDialog>,
@@ -262,14 +268,21 @@ struct App {
 
 impl App {
     /// The property sheet; the dialogs are created when first opened.
-    fn new(mode: Mode, printer: Identity) -> Result<Rc<App>, slint::PlatformError> {
+    /// `profile`: the one matching the printer's MDL. Without one, the
+    /// maintenance jobs need an ESC/P device ID, and use the generic profile.
+    fn new(mode: Mode, printer: Identity, profile: Option<Profile>) -> Result<Rc<App>, slint::PlatformError> {
         let main = MainWindow::new()?;
+        let profiled = profile.is_some();
+        let profile = profile.unwrap_or_else(Profile::generic);
         main.set_queue(printer.queue.clone().into());
-        main.set_maintenance(printer.maintenance());
+        main.set_maintenance(printer.id.maintenance() || profiled);
+        main.set_experimental(profile.experimental());
         main.set_version_text(env!("CARGO_PKG_VERSION").into());
         Ok(Rc::new(App {
             mode,
             printer,
+            profile,
+            profiled,
             main,
             wait: Lazy::new(dialogs::wait),
             nozzle: Lazy::new(dialogs::nozzle),
@@ -629,7 +642,8 @@ impl App {
             // Dialog 220 with status, 226 without: same layout and text.
             Utility::HeadCleaning => {
                 self.cleaning.set_body(CLEAN_INTRO.into());
-                self.cleaning.set_power(false);
+                self.cleaning.set_kinds(strings(self.profile.cleaning.iter().map(|c| c.label.as_str())));
+                self.cleaning.set_kind(0);
                 self.open(&self.cleaning);
             }
             Utility::PaperGuide => {
@@ -656,7 +670,8 @@ impl App {
 
     fn nozzle_print(&self) {
         self.close(&self.nozzle);
-        self.run_job(Utility::NozzleCheck, Some(("nozzle-check", commands::nozzle_check_job(Timestamp::now()))), |app, res| {
+        let job = commands::nozzle_check_job(self.profile.nc_param, Timestamp::now());
+        self.run_job(Utility::NozzleCheck, Some(("nozzle-check".into(), job)), |app, res| {
             match res {
                 Ok(sent) => {
                     app.show_dump(&sent);
@@ -668,24 +683,29 @@ impl App {
         });
     }
 
-    fn cleaning_start(&self, power: bool) {
+    /// The cleaning type picked in dialog 220/226 (a row of the profile's list).
+    fn cleaning_kind(&self) -> &profile::Cleaning {
+        let i = usize::try_from(self.cleaning.get_kind()).unwrap_or(0);
+        self.profile.cleaning.get(i).unwrap_or(&self.profile.cleaning[0])
+    }
+
+    fn cleaning_start(&self) {
         self.close(&self.cleaning);
-        if power {
+        if self.cleaning_kind().confirms() {
             // FUN_004118dc shows dialog 360 when the selected value is not 0
             // and E_IHBRG5P string 5060 exists (it does on the L800).
             self.power.set_body(POWER_CONFIRM.into());
             self.open(&self.power);
         } else {
-            self.run_cleaning(Cleaning::Normal);
+            self.run_cleaning();
         }
     }
 
-    fn run_cleaning(&self, kind: Cleaning) {
-        let name = match kind {
-            Cleaning::Normal => "head-cleaning",
-            Cleaning::Power => "power-cleaning",
-        };
-        self.run_job(Utility::HeadCleaning, Some((name, commands::head_cleaning_job(kind, Timestamp::now()))), |app, res| {
+    /// Spool the cleaning type picked in dialog 220/226.
+    fn run_cleaning(&self) {
+        let ch = self.cleaning_kind().ch;
+        let job = commands::head_cleaning_job(ch, Timestamp::now());
+        self.run_job(Utility::HeadCleaning, Some((format!("head-cleaning-{ch:02x}"), job)), |app, res| {
             match res {
                 Ok(sent) => {
                     app.show_dump(&sent);
@@ -703,7 +723,7 @@ impl App {
     /// The Windows worker (FUN_00428d14): popup 201, re-read status (ST=00
     /// stops with message 3000), check the spooler (offline/paused stops with
     /// 3000), spool the job. In dry-run the queue check is only a note.
-    fn run_job(&self, u: Utility, job: Option<(&'static str, Vec<u8>)>, then: JobDone) {
+    fn run_job(&self, u: Utility, job: Option<(String, Vec<u8>)>, then: JobDone) {
         self.show_wait(u);
         let (mode, p, have_status) = (self.mode.clone(), self.printer.clone(), self.have_status.get());
         let queue = p.queue.clone();
@@ -722,7 +742,7 @@ impl App {
                         Some((name, bytes)) => {
                             // No status session may be open while CUPS gets the job.
                             let _device = status::exclusive();
-                            transport::submit(&mode, &queue, name, &bytes).map_err(Fail::Plain)?
+                            transport::submit(&mode, &queue, &name, &bytes).map_err(Fail::Plain)?
                         }
                     };
                     if let Some(p) = problem {
@@ -884,6 +904,15 @@ impl App {
         }
     }
 
+    /// The profile lines of Printer and Option Information.
+    fn profile_summary(&self) -> String {
+        let p = &self.profile;
+        let name = if self.profiled { format!("{} (Windows family \"{}\")", p.mdl, p.windows_family) } else { "generic".into() };
+        let tested = if p.experimental() { "Experimental: not yet tested on this model.".to_string() } else { format!("Tested: {}", p.tested) };
+        let cleaning: Vec<String> = p.cleaning.iter().map(|c| format!("{} (CH {:02X})", c.label, c.ch)).collect();
+        format!("Profile: {name}\n{tested}\nNozzle check: NC {:02X}; cleaning: {}\n", p.nc_param, cleaning.join(", "))
+    }
+
     fn show_printer_info(&self) {
         self.info.set_caption("Printer and Option Information".into());
         self.info.set_heading(
@@ -891,7 +920,7 @@ impl App {
         );
         // lpstat can be slow when cupsd is: keep it off the UI thread.
         let queue = self.printer.queue.clone();
-        let summary = self.printer.summary();
+        let summary = format!("{}{}", self.printer.summary(), self.profile_summary());
         bg(move || format!("{summary}\n{}", transport::queue_info(&queue)), |app, text| {
             app.info.set_content(text.into());
             app.open(&app.info);
@@ -953,9 +982,11 @@ struct Args {
     dump_dir: Option<PathBuf>,
     /// Open on the Maintenance tab (Windows: launch code EPUT).
     utility: bool,
+    /// --profile: more profiles, before the built-in ones.
+    profile: Option<PathBuf>,
 }
 
-const USAGE: &str = "Usage: epson-l800-utility [--utility] [--dry-run] [--dump-dir DIR] [--queue NAME]
+const USAGE: &str = "Usage: epson-l800-utility [--utility] [--dry-run] [--dump-dir DIR] [--queue NAME] [--profile FILE]
 
   --utility       open on the Maintenance tab (default: Main)
   --dry-run       write each job to a file and show a hexdump; never calls lp,
@@ -963,6 +994,8 @@ const USAGE: &str = "Usage: epson-l800-utility [--utility] [--dry-run] [--dump-d
   --dump-dir DIR  folder for dry-run files (default: ~/.cache/epson-l800-utility)
   --queue NAME    CUPS queue of the printer (default: the only Epson queue;
                   with several, a list to choose from)
+  --profile FILE  maintenance profiles in the profiles.toml format; they
+                  come before the built-in ones (to try a new model)
 ";
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -970,6 +1003,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut dry = false;
     let mut dir = None;
     let mut utility = false;
+    let mut profile = None;
     let mut it = args;
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -977,6 +1011,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--utility" => utility = true,
             "--dump-dir" => dir = Some(PathBuf::from(it.next().ok_or("--dump-dir needs a value")?)),
             "--queue" => queue = Some(it.next().ok_or("--queue needs a value")?),
+            "--profile" => profile = Some(PathBuf::from(it.next().ok_or("--profile needs a value")?)),
             "-h" | "--help" => {
                 print!("{USAGE}");
                 std::process::exit(0);
@@ -991,7 +1026,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     if dir.is_some() && !dry {
         return Err("--dump-dir needs --dry-run".into());
     }
-    Ok(Args { queue, dump_dir: dry.then(|| dir.unwrap_or_else(transport::default_dump_dir)), utility })
+    Ok(Args { queue, dump_dir: dry.then(|| dir.unwrap_or_else(transport::default_dump_dir)), utility, profile })
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -1002,6 +1037,17 @@ fn main() -> Result<(), slint::PlatformError> {
             std::process::exit(2);
         }
     };
+    let mut profiles = match &args.profile {
+        None => vec![],
+        Some(f) => match std::fs::read_to_string(f).map_err(|e| e.to_string()).and_then(|t| profile::parse(&t)) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{}: {e}", f.display());
+                std::process::exit(2);
+            }
+        },
+    };
+    profiles.extend(profile::builtin());
     // The Wayland app_id (X11 WM_CLASS) of every window: GNOME matches it to
     // epson-l800-utility.desktop (StartupWMClass), so the sheet and its
     // dialogs group as one app with our icon. Must be set before any window
@@ -1014,7 +1060,9 @@ fn main() -> Result<(), slint::PlatformError> {
             None => return Ok(()),
         },
     };
-    let app = App::new(args.dump_dir.map_or(Mode::Live, Mode::DryRun), Identity::of(&queue))?;
+    let printer = Identity::of(&queue);
+    let profile = profile::find(&profiles, printer.id.mdl()).cloned();
+    let app = App::new(args.dump_dir.map_or(Mode::Live, Mode::DryRun), printer, profile)?;
     APP.with(|a| *a.borrow_mut() = Rc::downgrade(&app));
     app.main.set_dry_run(app.dry_run());
     app.main.set_current_tab(if args.utility { 4 } else { 1 });
@@ -1191,9 +1239,10 @@ mod dialogs {
 
     pub fn cleaning() -> HeadCleaningDialog {
         let d = make(HeadCleaningDialog::new);
-        d.on_start(|power| {
+        d.on_start(|kind| {
             if let Some(a) = app() {
-                a.cleaning_start(power)
+                a.cleaning.set_kind(kind);
+                a.cleaning_start();
             }
         });
         d.on_cancel(on(|a| a.close(&a.cleaning)));
@@ -1204,7 +1253,7 @@ mod dialogs {
         let d = make(PowerCleaningDialog::new);
         d.on_ok(on(|a| {
             a.close(&a.power);
-            a.run_cleaning(Cleaning::Power);
+            a.run_cleaning();
         }));
         // [Cancel] returns to the Head Cleaning dialog.
         d.on_cancel(on(|a| {
@@ -1329,7 +1378,7 @@ mod tests {
     #[test]
     fn reload_restores_the_sheet() {
         let _ = slint::platform::set_platform(Box::new(Headless));
-        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }).unwrap();
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }, None).unwrap();
         let p = app.main.global::<Prefs>();
         fill_lists(&p);
         let d = Values::default;
@@ -1357,7 +1406,7 @@ mod tests {
     #[test]
     fn copies_are_clamped_and_committed() {
         let _ = slint::platform::set_platform(Box::new(Headless));
-        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }).unwrap();
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }, None).unwrap();
         let p = app.main.global::<Prefs>();
         fill_lists(&p);
         p.set_copies(0);

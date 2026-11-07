@@ -1,4 +1,7 @@
-//! ESC/P2 "remote mode" maintenance jobs for the Epson L800.
+//! ESC/P2 "remote mode" maintenance jobs. The envelope is the same for every
+//! Epson inkjet (Epson's Linux utility and escpr build the same one,
+//! rea/MULTI-MODEL.md §1.3); the model only sets the last byte of `NC` and
+//! of `CH` (profiles.toml).
 //!
 //! Every byte here comes from the Windows L800 driver (family "G5P",
 //! `Windows/System32/spool/drivers/x64/3/E_*G5P.*`). The Windows utility
@@ -64,9 +67,12 @@ pub const LD: &[u8] = b"LD\x00\x00";
 /// Opcode 0x103: form feed.
 pub const FORM_FEED: &[u8] = b"\x0c";
 /// `E_IHBRG5P` string 1528 `06, 4E, 43, 02, 00, 00, 00`: nozzle check.
-pub const NOZZLE_CHECK: &[u8] = b"NC\x02\x00\x00\x00";
+/// The last byte is the profile's `nc_param`.
+pub const NOZZLE_CHECK: [u8; 6] = *b"NC\x02\x00\x00\x00";
 /// `E_IHBRG5P` string 1527 `06, 43, 48, 02, 00, 00, 00`: head cleaning.
-/// The last byte is replaced by the cleaning type (see [`Cleaning`]).
+/// The last byte is the cleaning type, the profile's `ch` (L800: RT_RCDATA
+/// 10460 gives 0x00 Cleaning, 0x10 Power Cleaning; `FUN_00409b3c`, opcode
+/// 0x216 flags 5, writes it into byte 5).
 pub const HEAD_CLEANING: [u8; 6] = *b"CH\x02\x00\x00\x00";
 
 /// Local time sent with the `TI` command (opcode 0x106, `FUN_0040b3ac`).
@@ -106,39 +112,20 @@ impl Timestamp {
     }
 }
 
-/// Cleaning type. These are the radio buttons of the Windows Head Cleaning dialog.
-/// `E_IHBRG5P` RT_RCDATA 10460 lists them as `(control, label string, default,
-/// ..., value, ...)`: control 513 "Cleaning" (string 10470, default) has value
-/// 0x0000, and control 514 "Power Cleaning" (string 10471) has value 0x0010.
-/// `FUN_0041352c` stores the selected value in `DAT_00457cb0`, and
-/// `FUN_00409b3c` (opcode 0x216, flags 5) writes it into byte 5 of `CH`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cleaning {
-    Normal,
-    Power,
-}
-
-impl Cleaning {
-    pub fn type_byte(self) -> u8 {
-        match self {
-            Cleaning::Normal => 0x00,
-            Cleaning::Power => 0x10,
-        }
-    }
-}
-
 /// Nozzle check job, `E_IHBRG5P` RT_RCDATA 1800 (17 records):
 /// 0x104, 0x102, 0x100, 0x106, 0x105, (0x0001 string 1528), 0x101,
 /// 0x109, 0x108, 0x109, 0x108, 0x100, 0x10a, 0x10b, 0x101, 0x103, end,
-/// then the job-end trailer.
-pub fn nozzle_check_job(ts: Timestamp) -> Vec<u8> {
+/// then the job-end trailer. `nc` is the last byte of `NC`.
+pub fn nozzle_check_job(nc: u8, ts: Timestamp) -> Vec<u8> {
+    let mut nc_cmd = NOZZLE_CHECK;
+    nc_cmd[5] = nc;
     [
         EXIT_PACKET_MODE,
         RESET_TWICE,
         ENTER_REMOTE,
         &ts.ti_command(),
         JOB_START,
-        NOZZLE_CHECK,
+        &nc_cmd,
         EXIT_REMOTE,
         b"\r\n\r\n",
         ENTER_REMOTE,
@@ -153,10 +140,11 @@ pub fn nozzle_check_job(ts: Timestamp) -> Vec<u8> {
 
 /// Head cleaning job, `E_IHBRG5P` RT_RCDATA 1802 (7 records):
 /// 0x104, 0x102, 0x100, 0x106, (0x216 flags 5, string 1527), 0x101, end,
-/// then the job-end trailer. There is no job start, VI/LD or form feed in this script.
-pub fn head_cleaning_job(kind: Cleaning, ts: Timestamp) -> Vec<u8> {
+/// then the job-end trailer. There is no job start, VI/LD or form feed in
+/// this script. `ch` is the last byte of `CH` (the cleaning type).
+pub fn head_cleaning_job(ch_type: u8, ts: Timestamp) -> Vec<u8> {
     let mut ch = HEAD_CLEANING;
-    ch[5] = kind.type_byte();
+    ch[5] = ch_type;
     [EXIT_PACKET_MODE, RESET_TWICE, ENTER_REMOTE, &ts.ti_command(), &ch, EXIT_REMOTE, JOB_END_TRAILER].concat()
 }
 
@@ -194,34 +182,61 @@ mod tests {
         (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
     }
 
-    /// Golden vectors from the independent verifier (phase2/verify/golden.json).
-    /// They emulate RCDATA 1800/1802 plus trailer 4302 with the clock pinned
-    /// to 2025-01-02 03:04:05 (bytes 44..55).
-    const GOLDEN_TS: Timestamp = Timestamp { year: 2025, month: 1, day: 2, hour: 3, minute: 4, second: 5 };
-    const GOLDEN_NOZZLE_CHECK: &str = "0000001b0140454a4c20313238342e340a40454a4c20202020200a1b401b401b285208000052454d4f544531544908000007e901020304054a530400000000004e43020000001b0000000d0a0d0a1b285208000052454d4f5445315649020000004c4400001b0000000c1b401b401b285208000052454d4f5445314a450100001b000000";
-    const GOLDEN_HEAD_CLEANING: &str = "0000001b0140454a4c20313238342e340a40454a4c20202020200a1b401b401b285208000052454d4f544531544908000007e901020304054348020000001b0000001b401b401b285208000052454d4f5445314a450100001b000000";
-    const GOLDEN_POWER_CLEANING: &str = "0000001b0140454a4c20313238342e340a40454a4c20202020200a1b401b401b285208000052454d4f544531544908000007e901020304054348020000101b0000001b401b401b285208000052454d4f5445314a450100001b000000";
-
-    #[test]
-    fn nozzle_check_matches_golden() {
-        let job = nozzle_check_job(GOLDEN_TS);
-        assert_eq!(job.len(), 132);
-        assert_eq!(job, hex(GOLDEN_NOZZLE_CHECK));
+    /// The clock in a job's `TI` command.
+    fn ti_of(job: &[u8]) -> Timestamp {
+        let i = job.windows(5).position(|w| w == b"TI\x08\x00\x00").expect("TI") + 5;
+        let t = &job[i..i + 7];
+        Timestamp { year: u16::from_be_bytes([t[0], t[1]]), month: t[2], day: t[3], hour: t[4], minute: t[5], second: t[6] }
     }
 
-    #[test]
-    fn head_cleaning_matches_golden() {
-        let job = head_cleaning_job(Cleaning::Normal, GOLDEN_TS);
-        assert_eq!(job.len(), 92);
-        assert_eq!(job, hex(GOLDEN_HEAD_CLEANING));
+    /// Rebuild a golden job (`nozzle-check` or `head-cleaning-<ch>`) with
+    /// the profile's parameters and the golden's own clock.
+    fn rebuild(p: &crate::profile::Profile, job: &str, golden: &[u8]) -> Vec<u8> {
+        let ts = ti_of(golden);
+        if job == "nozzle-check" {
+            return nozzle_check_job(p.nc_param, ts);
+        }
+        let ch = u8::from_str_radix(job.strip_prefix("head-cleaning-").expect(job), 16).unwrap();
+        assert!(p.cleaning.iter().any(|c| c.ch == ch), "{}: no cleaning with ch {ch:02x}", p.mdl);
+        head_cleaning_job(ch, ts)
     }
 
+    fn golden(path: &std::path::Path) -> Vec<u8> {
+        hex(&std::fs::read_to_string(path).unwrap().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join(" "))
+    }
+
+    /// tests/golden/<MDL>/<job>.hex: golden vectors (the L800 ones come from
+    /// the independent verifier, phase2/verify/golden.json). Each is rebuilt
+    /// from its model's profile and compared byte for byte.
     #[test]
-    fn power_cleaning_matches_golden() {
-        let job = head_cleaning_job(Cleaning::Power, GOLDEN_TS);
-        assert_eq!(job.len(), 92);
-        assert_eq!(job[61], 0x10);
-        assert_eq!(job, hex(GOLDEN_POWER_CLEANING));
+    fn jobs_match_goldens() {
+        let profiles = crate::profile::builtin();
+        let mut seen = 0;
+        for model in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden")).unwrap().flatten() {
+            let mdl = model.file_name().to_string_lossy().into_owned();
+            let p = crate::profile::find(&profiles, Some(&mdl)).unwrap_or_else(|| panic!("no profile for {mdl}"));
+            for f in std::fs::read_dir(model.path()).unwrap().flatten() {
+                let job = f.path().file_stem().unwrap().to_string_lossy().into_owned();
+                let want = golden(&f.path());
+                assert_eq!(rebuild(p, &job, &want), want, "{mdl}/{job}");
+                seen += 1;
+            }
+        }
+        assert!(seen >= 3);
+    }
+
+    /// The generic profile sends the same bytes as the L800's normal jobs.
+    #[test]
+    fn generic_equals_l800() {
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/L800"));
+        let g = crate::profile::Profile::generic();
+        for job in ["nozzle-check", "head-cleaning-00"] {
+            let want = golden(&dir.join(format!("{job}.hex")));
+            assert_eq!(rebuild(&g, job, &want), want, "{job}");
+        }
+        let want = golden(&dir.join("nozzle-check.hex"));
+        assert_eq!(want.len(), 132);
+        assert_eq!(ti_of(&want), Timestamp { year: 2025, month: 1, day: 2, hour: 3, minute: 4, second: 5 });
     }
 
     #[test]
@@ -245,8 +260,8 @@ mod tests {
 
     #[test]
     fn clock_only_changes_the_ti_bytes() {
-        let a = nozzle_check_job(GOLDEN_TS);
-        let b = nozzle_check_job(TS);
+        let a = nozzle_check_job(0, Timestamp { year: 2025, month: 1, day: 2, hour: 3, minute: 4, second: 5 });
+        let b = nozzle_check_job(0, TS);
         let differing: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
         assert!(differing.iter().all(|i| (49..=55).contains(i)), "{differing:?}");
     }

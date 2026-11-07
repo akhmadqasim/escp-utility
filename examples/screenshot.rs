@@ -133,6 +133,8 @@ fn main() {
     let main = MainWindow::new().unwrap();
     main.set_version_text(env!("CARGO_PKG_VERSION").into());
     main.set_dry_run(true);
+    // profiles.toml: the L800 has no `tested` entry yet.
+    main.set_experimental(true);
     fill_lists(&main.global::<Prefs>());
     // Ink levels of the live L800 reply in src/status/l800_st2_live_masked.hex.
     let inks: Vec<InkLevel> = [("Cyan", 0x00a0e0, 47), ("Magenta", 0xd0168c, 37), ("Light Magenta", 0xf08cc8, 18), ("Light Cyan", 0x7fd0f0, 3), ("Black", 0x202020, 81), ("Yellow", 0xf0c800, 27)]

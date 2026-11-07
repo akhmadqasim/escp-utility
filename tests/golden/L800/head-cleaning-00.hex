@@ -1,0 +1,8 @@
+# L800 Head Cleaning, CH byte 5 = 00 (RCDATA 1802 + trailer 4302), 92 bytes. Golden vector from the independent verifier
+# (phase2/verify/golden.json), clock pinned to 2025-01-02 03:04:05 (the TI bytes).
+00 00 00 1B 01 40 45 4A 4C 20 31 32 38 34 2E 34
+0A 40 45 4A 4C 20 20 20 20 20 0A 1B 40 1B 40 1B
+28 52 08 00 00 52 45 4D 4F 54 45 31 54 49 08 00
+00 07 E9 01 02 03 04 05 43 48 02 00 00 00 1B 00
+00 00 1B 40 1B 40 1B 28 52 08 00 00 52 45 4D 4F
+54 45 31 4A 45 01 00 00 1B 00 00 00

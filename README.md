@@ -234,11 +234,32 @@ sent to the printer.
   `usb://MFG/MDL` (printer off); the PPD's `*1284DeviceID` from
   `GET /printers/<queue>.ppd` on cupsd (network queues).
 - **Gates.** Nozzle Check, Head Cleaning and Paper Guide Cleaning need
-  `MFG:EPSON` and CMD `ESCPL2` or `ESCPR*`, the same test as Epson's Linux
-  utility (the L800 also passes when its ID has no CMD, so it works as
-  before while switched off). Otherwise they are disabled with a tooltip.
-  The status request needs `D4` in the printer's live CMD and a usblp
-  node; without it the app takes the no-status path.
+  `MFG:EPSON` and CMD `ESCPL2` or `ESCPR*` (the same test as Epson's Linux
+  utility), or a profile for the MDL (so the L800 works as before while
+  switched off, when its ID comes from the URI without CMD). Otherwise they
+  are disabled with a tooltip. The status request needs `D4` in the
+  printer's live CMD and a usblp node; without it the app takes the
+  no-status path.
+
+## Profiles
+
+`profiles.toml` (built in) holds what differs per model, keyed by the exact
+MDL of the device ID: `tested`, `windows_family`, `nc_param` (last byte of
+`NC 02 00 00 n`) and `cleaning`, the Head Cleaning radios as
+`{ label, ch }` (last byte of `CH 02 00 00 ch`). The L800: family "G5P"
+(the Windows texts and tables), NC 00, Cleaning 00 and Power Cleaning 10.
+A printer without a profile gets the generic one: NC 00 and one Cleaning
+with CH 00, which is what Epson's Linux utility sends to every model.
+
+- A test lints the file: the first cleaning has ch 0, a non-zero ch asks
+  for confirmation first (dialog 360), and each MDL appears once.
+- While `tested` is empty the Maintenance tab says "Experimental on this
+  model", and Printer and Option Information says so too. The L800's is
+  empty until the jobs have run on the real printer.
+- `--profile FILE` reads more profiles in the same format, before the
+  built-in ones, to try a model.
+- Only measured values belong here; CH 20, alignment, paper guide cleaning
+  and `ri` are not in the schema.
 
 ## Status
 
@@ -311,6 +332,8 @@ Options:
 --dump-dir DIR  folder for dry-run files (default: ~/.cache/epson-l800-utility)
 --queue NAME    CUPS queue of the printer (default: the only Epson queue;
                 with several, a list to choose from)
+--profile FILE  maintenance profiles in the profiles.toml format, used
+                before the built-in ones
 ```
 
 No `-dev` packages are needed. fontconfig is loaded at run time
@@ -351,8 +374,11 @@ script from the model data DLL (`E_IHBRG5P.DLL`, RT_RCDATA 1800 = nozzle check,
 1802 = head cleaning). The interpreter is `FUN_004083dc`. `FUN_004082ec` then
 appends the job-end trailer (string 4302). The bytes are in `src/commands.rs`,
 with one comment per opcode and source. Unit tests compare them byte for byte
-with golden vectors that an independent verifier emulated from the same
-resources.
+with the golden vectors in `tests/golden/<MDL>/<job>.hex` (`nozzle-check`,
+`head-cleaning-<ch>`): each is rebuilt with its model's profile and the
+clock read from its own `TI` bytes. The L800 goldens were emulated from the
+same resources by an independent verifier. The generic profile's jobs must
+equal the L800's normal ones.
 
 Shared envelope (all jobs):
 
@@ -445,6 +471,8 @@ Errors:         queue paused / not accepting / lp failed --> 271;  ST=00 before 
 ## Layout of the code
 
 - `src/commands.rs`: job bytes, with evidence comments and golden-vector tests
+  (`tests/golden/`)
+- `profiles.toml`, `src/profile.rs`: per-model maintenance data and its lint
 - `src/printer.rs`: Epson queues, IEEE 1284 device ID, maintenance and status gates
 - `src/transport.rs`: `lp -o raw`, dry-run files, CUPS queue check and info
 - `src/status/`: 1284.4 session (`d4.rs`), usblp port (`usblp.rs`), ST2 parser

@@ -1,0 +1,29 @@
+# Maintenance profiles, one [[printer]] per model, matched by the exact MDL of
+# the printer's IEEE 1284 device ID. A printer without a profile gets the
+# generic one (src/profile.rs): NC 00 and one "Cleaning" with CH 00, which is
+# what Epson's Linux utility sends to every model (rea/MULTI-MODEL.md §1.3).
+# Only measured values go here (phase2/MULTI-MODEL-PLAN.md §2).
+#
+#   mdl             the IEEE 1284 MDL, e.g. "L800" (not the PPD's "L800 Series")
+#   tested          who ran Nozzle Check and every cleaning on real hardware,
+#                   and when; "" shows the model as experimental
+#   windows_family  "G5P" = the built-in Windows L800 texts and status tables;
+#                   "" = the generic ones
+#   nc_param        last byte of NC 02 00 00 <n> (nozzle check)
+#   cleaning        the Head Cleaning radios: label and the last byte of
+#                   CH 02 00 00 <ch>. The first must be ch 0; a non-zero ch
+#                   asks for confirmation first.
+
+[[printer]]
+mdl = "L800"
+tested = ""
+windows_family = "G5P"
+# E_IHBRG5P string 1528: NC 02 00 00 00.
+nc_param = 0x00
+# E_IHBRG5P RT_RCDATA 10460: control 513 "Cleaning" (string 10470) = 0x0000,
+# control 514 "Power Cleaning" (string 10471) = 0x0010; FUN_00409b3c writes
+# the value into byte 5 of CH (string 1527).
+cleaning = [
+    { label = "Cleaning", ch = 0x00 },
+    { label = "Power Cleaning", ch = 0x10 },
+]
