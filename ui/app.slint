@@ -191,6 +191,7 @@ export component MainWindow inherits Window {
     property <length> page-y: 7px + root.tab-strip-h;
 
     title: root.queue + " Printing Preferences" + (root.dry-run ? "  (dry run: nothing is sent or saved)" : "");
+    icon: @image-url("icons/app.svg");
     width: 6px + root.inset + 443px + root.inset + 6px;
     height: root.page-y + root.inset + 434px + root.inset + 7px + 23px + 7px;
     default-font-size: 10.75px;

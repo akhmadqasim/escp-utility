@@ -94,6 +94,7 @@ export component DlgIcon inherits Rectangle {
 // Shared look of the utility dialogs: fixed client size, Tahoma-sized text.
 // Return runs the default button and Escape the cancel button.
 export component UtilityWindow inherits Window {
+    icon: @image-url("icons/app.svg");
     callback default-action();
     callback cancel-action();
     default-font-size: 10.75px;

@@ -50,6 +50,9 @@ const DRIVER_PAGE: &str = "https://download-center.epson.com/softwares/?device_i
 const SEE_DETAILS: &str = "Click [Details] to see more.";
 const DRY_RUN_NOTE: &str = "Dry run: no job was sent to the printer.\n\n";
 
+/// Wayland app_id / X11 WM_CLASS; matches the desktop file and icon name.
+const APP_ID: &str = "epson-l800-utility";
+
 /// The "Please wait..." popup stays up at least this long, so it does not just flicker.
 const MIN_WAIT: Duration = Duration::from_millis(700);
 /// Status Monitor 3 polls every 5 s (E_IAIFG5P.DAT LocalMonitoringTimer).
@@ -150,6 +153,46 @@ fn at_least_min_wait<T>(f: impl FnOnce() -> T) -> T {
     v
 }
 
+/// A dialog that is created (and wired) on first use. Slint's winit backend
+/// creates a toplevel for every window component when the event loop starts,
+/// shown or not, and GNOME then lists each as a separate, unknown app. A
+/// window that is hidden again is dropped by Slint, so with this only the
+/// dialogs that are open exist on screen.
+struct Lazy<T> {
+    cell: std::cell::OnceCell<T>,
+    make: fn() -> T,
+}
+
+impl<T> Lazy<T> {
+    fn new(make: fn() -> T) -> Self {
+        Lazy { cell: std::cell::OnceCell::new(), make }
+    }
+    /// The dialog if it was created already.
+    fn created(&self) -> Option<&T> {
+        self.cell.get()
+    }
+}
+
+impl<T> std::ops::Deref for Lazy<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.cell.get_or_init(self.make)
+    }
+}
+
+/// Create a dialog component; the platform exists once the sheet does.
+fn make<T>(new: fn() -> Result<T, slint::PlatformError>) -> T {
+    new().expect("cannot create a dialog window")
+}
+
+/// The sheet takes clicks again when a dialog is closed with its close box.
+fn refresh_on_close(w: &slint::Window) {
+    w.on_close_requested(|| {
+        Timer::single_shot(Duration::ZERO, on(|a| a.refresh_busy()));
+        slint::CloseRequestResponse::HideWindow
+    });
+}
+
 /// State of the cleaning progress dialog (223).
 #[derive(Default)]
 struct Progress {
@@ -161,21 +204,21 @@ struct App {
     mode: Mode,
     queue: String,
     main: MainWindow,
-    wait: WaitDialog,
-    nozzle: NozzleCheckDialog,
-    nozzle_result: NozzleResultDialog,
-    cleaning: HeadCleaningDialog,
-    power: PowerCleaningDialog,
-    progress: ProgressDialog,
-    cleaning_done: CleaningDoneDialog,
-    paper_guide: PaperGuideDialog,
-    message: MessageDialog,
-    monitor: StatusMonitorDialog,
-    info: TextDialog,
-    dump: TextDialog,
-    current_settings: CurrentSettingsDialog,
-    color_controls: ColorControlsDialog,
-    layout_dialog: LayoutDialog,
+    wait: Lazy<WaitDialog>,
+    nozzle: Lazy<NozzleCheckDialog>,
+    nozzle_result: Lazy<NozzleResultDialog>,
+    cleaning: Lazy<HeadCleaningDialog>,
+    power: Lazy<PowerCleaningDialog>,
+    progress: Lazy<ProgressDialog>,
+    cleaning_done: Lazy<CleaningDoneDialog>,
+    paper_guide: Lazy<PaperGuideDialog>,
+    message: Lazy<MessageDialog>,
+    monitor: Lazy<StatusMonitorDialog>,
+    info: Lazy<TextDialog>,
+    dump: Lazy<TextDialog>,
+    current_settings: Lazy<CurrentSettingsDialog>,
+    color_controls: Lazy<ColorControlsDialog>,
+    layout_dialog: Lazy<LayoutDialog>,
     /// The last pre-check got a status reply (Windows +0x51C / +0x6C).
     have_status: Cell<bool>,
     progress_state: RefCell<Progress>,
@@ -188,7 +231,7 @@ struct App {
 }
 
 impl App {
-    /// The property sheet and every dialog, not shown yet.
+    /// The property sheet; the dialogs are created when first opened.
     fn new(mode: Mode, queue: String) -> Result<Rc<App>, slint::PlatformError> {
         let main = MainWindow::new()?;
         main.set_queue(queue.clone().into());
@@ -197,21 +240,21 @@ impl App {
             mode,
             queue,
             main,
-            wait: WaitDialog::new()?,
-            nozzle: NozzleCheckDialog::new()?,
-            nozzle_result: NozzleResultDialog::new()?,
-            cleaning: HeadCleaningDialog::new()?,
-            power: PowerCleaningDialog::new()?,
-            progress: ProgressDialog::new()?,
-            cleaning_done: CleaningDoneDialog::new()?,
-            paper_guide: PaperGuideDialog::new()?,
-            message: MessageDialog::new()?,
-            monitor: StatusMonitorDialog::new()?,
-            info: TextDialog::new()?,
-            dump: TextDialog::new()?,
-            current_settings: CurrentSettingsDialog::new()?,
-            color_controls: ColorControlsDialog::new()?,
-            layout_dialog: LayoutDialog::new()?,
+            wait: Lazy::new(dialogs::wait),
+            nozzle: Lazy::new(dialogs::nozzle),
+            nozzle_result: Lazy::new(dialogs::nozzle_result),
+            cleaning: Lazy::new(dialogs::cleaning),
+            power: Lazy::new(dialogs::power),
+            progress: Lazy::new(dialogs::progress),
+            cleaning_done: Lazy::new(dialogs::cleaning_done),
+            paper_guide: Lazy::new(dialogs::paper_guide),
+            message: Lazy::new(dialogs::message),
+            monitor: Lazy::new(dialogs::monitor),
+            info: Lazy::new(dialogs::info),
+            dump: Lazy::new(dialogs::dump),
+            current_settings: Lazy::new(dialogs::current_settings),
+            color_controls: Lazy::new(dialogs::color_controls),
+            layout_dialog: Lazy::new(dialogs::layout_dialog),
             have_status: Cell::new(false),
             progress_state: RefCell::new(Progress::default()),
             poll_timer: Timer::default(),
@@ -239,29 +282,24 @@ impl App {
     }
 
     /// Every dialog that blocks the property sheet while it is open (the
-    /// Current Settings window is modeless).
-    fn modal_windows(&self) -> [&slint::Window; 14] {
-        [
-            self.wait.window(),
-            self.nozzle.window(),
-            self.nozzle_result.window(),
-            self.cleaning.window(),
-            self.power.window(),
-            self.progress.window(),
-            self.cleaning_done.window(),
-            self.paper_guide.window(),
-            self.message.window(),
-            self.monitor.window(),
-            self.info.window(),
-            self.dump.window(),
-            self.color_controls.window(),
-            self.layout_dialog.window(),
-        ]
+    /// Current Settings window is modeless). Dialogs never opened don't count.
+    fn modal_windows(&self) -> Vec<&slint::Window> {
+        let mut w = Vec::new();
+        macro_rules! add {
+            ($($f:ident),*) => { $( if let Some(d) = self.$f.created() { w.push(d.window()); } )* };
+        }
+        add!(wait, nozzle, nozzle_result, cleaning, power, progress, cleaning_done, paper_guide, message, monitor, info, dump, color_controls, layout_dialog);
+        w
     }
 
     /// Show or hide the Current Settings window (dialog 4050).
     fn show_settings(&self, on: bool) {
-        let _ = if on { self.current_settings.show() } else { self.current_settings.hide() };
+        if on {
+            let _ = self.current_settings.show();
+            self.refresh_current_settings();
+        } else if let Some(d) = self.current_settings.created() {
+            let _ = d.hide();
+        }
         self.main.global::<Prefs>().set_settings_shown(on);
     }
 
@@ -359,7 +397,7 @@ impl App {
         let layout = match id {
             "color-controls" => {
                 let v = self.prefs();
-                let d = &self.color_controls;
+                let d = &*self.color_controls;
                 d.set_color_mode(v.color_mode as i32);
                 d.set_gamma(v.gamma as i32);
                 d.set_brightness(v.brightness);
@@ -377,7 +415,7 @@ impl App {
             "watermark" => &layouts::WATERMARK,
             _ => return,
         };
-        let d = &self.layout_dialog;
+        let d = &*self.layout_dialog;
         d.set_caption(layout.caption.into());
         d.set_reason(layout.reason.into());
         d.set_client_w(layout.size.0);
@@ -393,7 +431,7 @@ impl App {
 
     /// Color Controls [OK]: take its values into the sheet (Apply/OK saves them).
     fn color_controls_ok(&self) {
-        let d = &self.color_controls;
+        let d = &*self.color_controls;
         let mut v = self.prefs();
         v.color_mode = usize::try_from(d.get_color_mode()).unwrap_or(1);
         v.gamma = usize::try_from(d.get_gamma()).unwrap_or(1);
@@ -413,6 +451,7 @@ impl App {
     /// The Current Settings window (dialog 4050): labels are strings 4053-4079.
     fn refresh_current_settings(&self) {
         use settings::*;
+        let Some(dialog) = self.current_settings.created() else { return };
         let v = self.prefs();
         let on_off = |b: bool| if b { "On" } else { "Off" }.to_string();
         let lines = [
@@ -445,7 +484,7 @@ impl App {
         ];
         let lines: Vec<SettingLine> =
             lines.into_iter().map(|(label, value)| SettingLine { label: label.into(), value: value.into() }).collect();
-        self.current_settings.set_lines(slint::VecModel::from_slice(&lines));
+        dialog.set_lines(slint::VecModel::from_slice(&lines));
     }
 
     /// Save for this user with `lpoptions -p <queue> -o ...` (~/.cups/lpoptions),
@@ -461,7 +500,7 @@ impl App {
             self.dump.set_caption("Dry run".into());
             self.dump.set_heading("Dry run: these settings were not saved. A real run would run this command:".into());
             self.dump.set_content(format!("lpoptions {}\n", args.join(" \\\n    ")).into());
-            self.open(&self.dump);
+            self.open(&*self.dump);
             p.set_dirty(false);
             return;
         }
@@ -483,7 +522,7 @@ impl App {
                     app.message.set_heading("The settings could not be saved.".into());
                     app.message.set_body(e.into());
                     app.message.set_show_details(false);
-                    app.open(&app.message);
+                    app.open(&*app.message);
                 }
             }
         });
@@ -500,7 +539,7 @@ impl App {
     fn show_wait(&self, u: Utility) {
         self.wait.set_utility(u.title().into());
         self.wait.set_glyph(u.icon());
-        self.open(&self.wait);
+        self.open(&*self.wait);
     }
 
     // Pre-check (FUN_004189c8): popup 201 while the status is read, then
@@ -518,7 +557,7 @@ impl App {
     }
 
     fn after_precheck(&self, u: Utility, res: QueryResult) {
-        self.close(&self.wait);
+        self.close(&*self.wait);
         // No reply (or CUPS has jobs, so we did not ask): the no-status path.
         let Ok(s) = res else {
             self.have_status.set(false);
@@ -547,17 +586,17 @@ impl App {
         match u {
             Utility::NozzleCheck => {
                 self.nozzle.set_body(NOZZLE_INTRO.into());
-                self.open(&self.nozzle);
+                self.open(&*self.nozzle);
             }
             // Dialog 220 with status, 226 without: same layout and text.
             Utility::HeadCleaning => {
                 self.cleaning.set_body(CLEAN_INTRO.into());
                 self.cleaning.set_power(false);
-                self.open(&self.cleaning);
+                self.open(&*self.cleaning);
             }
             Utility::PaperGuide => {
                 self.paper_guide.set_body(PAPER_GUIDE.into());
-                self.open(&self.paper_guide);
+                self.open(&*self.paper_guide);
             }
         }
     }
@@ -568,7 +607,7 @@ impl App {
     /// FUN_00407dc4 opens and closes an empty RAW job. We send nothing.
     /// Then the utility ends (message 0x41E closes 265).
     fn paper_guide_cleaning(&self) {
-        self.close(&self.paper_guide);
+        self.close(&*self.paper_guide);
         self.run_job(Utility::PaperGuide, None, |app, res| match res {
             // Live: the utility just ends. Dry run: say so, with any queue note.
             Ok(sent) if app.dry_run() => app.show_message(Utility::PaperGuide, "Dry run", &app.with_note(&sent.summary), false),
@@ -578,13 +617,13 @@ impl App {
     }
 
     fn nozzle_print(&self) {
-        self.close(&self.nozzle);
+        self.close(&*self.nozzle);
         self.run_job(Utility::NozzleCheck, Some(("nozzle-check", commands::nozzle_check_job(Timestamp::now()))), |app, res| {
             match res {
                 Ok(sent) => {
                     app.show_dump(&sent);
                     app.nozzle_result.set_body(app.with_note(NOZZLE_RESULT).into());
-                    app.open(&app.nozzle_result);
+                    app.open(&*app.nozzle_result);
                 }
                 Err(f) => app.show_fail(Utility::NozzleCheck, f),
             }
@@ -592,12 +631,12 @@ impl App {
     }
 
     fn cleaning_start(&self, power: bool) {
-        self.close(&self.cleaning);
+        self.close(&*self.cleaning);
         if power {
             // FUN_004118dc shows dialog 360 when the selected value is not 0
             // and E_IHBRG5P string 5060 exists (it does on the L800).
             self.power.set_body(POWER_CONFIRM.into());
-            self.open(&self.power);
+            self.open(&*self.power);
         } else {
             self.run_cleaning(Cleaning::Normal);
         }
@@ -655,7 +694,7 @@ impl App {
                 (then, res)
             },
             |app, (then, v)| {
-                app.close(&app.wait);
+                app.close(&*app.wait);
                 then(app, v)
             },
         );
@@ -671,7 +710,7 @@ impl App {
         self.progress.set_value(0.0);
         self.progress.set_frame(0);
         self.progress.set_animate(true);
-        self.open(&self.progress);
+        self.open(&*self.progress);
         self.poll_timer.start(TimerMode::Repeated, status::POLL, on(|a| a.poll_cleaning()));
     }
 
@@ -709,7 +748,7 @@ impl App {
                     Duration::from_millis(500),
                     on(|a| {
                         a.progress.set_animate(false);
-                        a.close(&a.progress);
+                        a.close(&*a.progress);
                         a.show_done(true);
                     }),
                 );
@@ -718,7 +757,7 @@ impl App {
                 self.poll_timer.stop();
                 self.bar_timer.stop();
                 self.progress.set_animate(false);
-                self.close(&self.progress);
+                self.close(&*self.progress);
                 self.show_done(false);
             }
         }
@@ -728,7 +767,7 @@ impl App {
     fn show_done(&self, finished_seen: bool) {
         let text = if finished_seen { CLEAN_DONE_STATUS } else { CLEAN_DONE };
         self.cleaning_done.set_body(self.with_note(text).into());
-        self.open(&self.cleaning_done);
+        self.open(&*self.cleaning_done);
     }
 
     fn show_fail(&self, u: Utility, f: Fail) {
@@ -751,7 +790,7 @@ impl App {
         self.message.set_heading(heading.into());
         self.message.set_body(body.into());
         self.message.set_show_details(details);
-        self.open(&self.message);
+        self.open(&*self.message);
     }
 
     // Status Monitor 3 window.
@@ -760,7 +799,7 @@ impl App {
         self.monitor.set_printer(self.queue.clone().into());
         self.monitor.set_title_text("Please wait...".into());
         self.monitor.set_body("".into());
-        self.open(&self.monitor);
+        self.open(&*self.monitor);
         self.poll_monitor();
         self.monitor_timer.start(TimerMode::Repeated, MONITOR_POLL, on(|a| a.poll_monitor()));
     }
@@ -802,7 +841,7 @@ impl App {
             self.dump.set_caption("Dry run".into());
             self.dump.set_heading(sent.summary.clone().into());
             self.dump.set_content(dump.clone().into());
-            self.open(&self.dump);
+            self.open(&*self.dump);
         }
     }
 
@@ -815,7 +854,7 @@ impl App {
         let queue = self.queue.clone();
         bg(move || transport::queue_info(&queue), |app, text| {
             app.info.set_content(text.into());
-            app.open(&app.info);
+            app.open(&*app.info);
         });
     }
 }
@@ -922,13 +961,15 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     };
     let app = App::new(args.dump_dir.map_or(Mode::Live, Mode::DryRun), args.queue)?;
+    // The Wayland app_id (X11 WM_CLASS) of every window: GNOME matches it to
+    // epson-l800-utility.desktop (StartupWMClass), so the sheet and its
+    // dialogs group as one app with our icon. Must be set before any window
+    // is shown (the winit windows are created on show).
+    slint::set_xdg_app_id(APP_ID)?;
     APP.with(|a| *a.borrow_mut() = Rc::downgrade(&app));
     app.main.set_dry_run(app.dry_run());
     app.main.set_current_tab(if args.utility { 4 } else { 1 });
     fill_lists(&app.main.global::<Prefs>());
-    let p = app.main.global::<Prefs>();
-    app.color_controls.set_color_mode_labels(p.get_color_mode_labels());
-    app.color_controls.set_gamma_labels(p.get_gamma_labels());
     app.set_prefs(&Values::default());
     // The sheet waits for the load, so no early edit (or OK) is lost to it.
     app.settings_io.set(true);
@@ -951,7 +992,6 @@ fn main() -> Result<(), slint::PlatformError> {
             app.main.global::<Prefs>().set_inks(slint::VecModel::from_slice(&ink_levels(&s)));
         }
     });
-    app.dump.set_monospace(true);
     wire(&app);
 
     app.main.show()?;
@@ -1013,18 +1053,11 @@ fn wire(ui: &App) {
             a.open_dialog(&id);
         }
     });
-    ui.color_controls.on_ok(on(|a| a.color_controls_ok()));
-    ui.color_controls.on_cancel(on(|a| a.close(&a.color_controls)));
-    ui.layout_dialog.on_dismiss(on(|a| a.close(&a.layout_dialog)));
     // Show Settings / Hide Settings toggles the Current Settings window.
-    prefs.on_toggle_settings(on(|a| a.show_settings(!a.current_settings.window().is_visible())));
-    ui.current_settings.on_dismiss(on(|a| a.show_settings(false)));
-    ui.current_settings.window().on_close_requested(|| {
-        if let Some(a) = app() {
-            a.show_settings(false);
-        }
-        slint::CloseRequestResponse::HideWindow
-    });
+    prefs.on_toggle_settings(on(|a| {
+        let shown = a.current_settings.created().is_some_and(|d| d.window().is_visible());
+        a.show_settings(!shown)
+    }));
     prefs.on_reset_defaults(on(|a| {
         a.set_prefs(&Values::default());
         let p = a.main.global::<Prefs>();
@@ -1040,87 +1073,169 @@ fn wire(ui: &App) {
         p.set_dirty(true);
         p.set_preset(i);
     });
-    // A dialog closed with its close box: the sheet takes clicks again.
-    // (201, 223 and Status Monitor 3 get their own handlers below.)
-    for w in ui.modal_windows() {
-        w.on_close_requested(|| {
+}
+
+/// One maker per dialog: create the window and connect its callbacks
+/// (handlers reach the app through `app()`). Used by `Lazy`.
+mod dialogs {
+    use super::*;
+
+    pub fn wait() -> WaitDialog {
+        let d = make(WaitDialog::new);
+        // Dialog 201 has no way out on Windows; it closes itself.
+        d.window().on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
+        d
+    }
+
+    pub fn nozzle() -> NozzleCheckDialog {
+        let d = make(NozzleCheckDialog::new);
+        refresh_on_close(d.window());
+        d.on_print(on(|a| a.nozzle_print()));
+        d.on_cancel(on(|a| a.close(&*a.nozzle)));
+        d
+    }
+
+    pub fn nozzle_result() -> NozzleResultDialog {
+        let d = make(NozzleResultDialog::new);
+        refresh_on_close(d.window());
+        // [Clean] goes to the Head Cleaning utility (state 2 in FUN_00413b60).
+        d.on_clean(on(|a| {
+            a.close(&*a.nozzle_result);
+            a.start(Utility::HeadCleaning);
+        }));
+        d.on_finish(on(|a| a.close(&*a.nozzle_result)));
+        d
+    }
+
+    pub fn cleaning() -> HeadCleaningDialog {
+        let d = make(HeadCleaningDialog::new);
+        refresh_on_close(d.window());
+        d.on_start(|power| {
+            if let Some(a) = app() {
+                a.cleaning_start(power)
+            }
+        });
+        d.on_cancel(on(|a| a.close(&*a.cleaning)));
+        d
+    }
+
+    pub fn power() -> PowerCleaningDialog {
+        let d = make(PowerCleaningDialog::new);
+        refresh_on_close(d.window());
+        d.on_ok(on(|a| {
+            a.close(&*a.power);
+            a.run_cleaning(Cleaning::Power);
+        }));
+        // [Cancel] returns to the Head Cleaning dialog.
+        d.on_cancel(on(|a| {
+            a.close(&*a.power);
+            a.open(&*a.cleaning);
+        }));
+        d
+    }
+
+    pub fn progress() -> ProgressDialog {
+        let d = make(ProgressDialog::new);
+        // Dialog 223 has no way out on Windows; it closes itself.
+        d.window().on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
+        d
+    }
+
+    pub fn cleaning_done() -> CleaningDoneDialog {
+        let d = make(CleaningDoneDialog::new);
+        refresh_on_close(d.window());
+        // [Print Nozzle Check Pattern] starts the Nozzle Check (state 1).
+        d.on_nozzle_check(on(|a| {
+            a.close(&*a.cleaning_done);
+            a.start(Utility::NozzleCheck);
+        }));
+        d.on_finish(on(|a| a.close(&*a.cleaning_done)));
+        d
+    }
+
+    pub fn paper_guide() -> PaperGuideDialog {
+        let d = make(PaperGuideDialog::new);
+        refresh_on_close(d.window());
+        d.on_cleaning(on(|a| a.paper_guide_cleaning()));
+        d.on_cancel(on(|a| a.close(&*a.paper_guide)));
+        d
+    }
+
+    pub fn message() -> MessageDialog {
+        let d = make(MessageDialog::new);
+        refresh_on_close(d.window());
+        d.on_ok(on(|a| a.close(&*a.message)));
+        d.on_details(on(|a| {
+            a.close(&*a.message);
+            a.open_monitor();
+        }));
+        d
+    }
+
+    pub fn monitor() -> StatusMonitorDialog {
+        let d = make(StatusMonitorDialog::new);
+        // "Print Queue": the GNOME printer settings show the CUPS queue.
+        d.on_print_queue(|| launch("gnome-control-center", "printers"));
+        d.on_ok(on(|a| {
+            a.monitor_timer.stop();
+            a.close(&*a.monitor);
+        }));
+        d.window().on_close_requested(|| {
+            if let Some(a) = app() {
+                a.monitor_timer.stop();
+            }
             Timer::single_shot(Duration::ZERO, on(|a| a.refresh_busy()));
             slint::CloseRequestResponse::HideWindow
         });
+        d
     }
 
-    // Dialogs 201 and 223 have no way out on Windows; they close themselves.
-    ui.wait.window().on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
-    ui.progress.window().on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
+    pub fn info() -> TextDialog {
+        let d = make(TextDialog::new);
+        refresh_on_close(d.window());
+        d.on_ok(on(|a| a.close(&*a.info)));
+        d
+    }
 
-    ui.nozzle.on_print(on(|a| a.nozzle_print()));
-    ui.nozzle.on_cancel(on(|a| {
-        a.close(&a.nozzle);
-    }));
-    // [Clean] goes to the Head Cleaning utility (state 2 in FUN_00413b60).
-    ui.nozzle_result.on_clean(on(|a| {
-        a.close(&a.nozzle_result);
-        a.start(Utility::HeadCleaning);
-    }));
-    ui.nozzle_result.on_finish(on(|a| {
-        a.close(&a.nozzle_result);
-    }));
+    pub fn dump() -> TextDialog {
+        let d = make(TextDialog::new);
+        refresh_on_close(d.window());
+        d.set_monospace(true);
+        d.on_ok(on(|a| a.close(&*a.dump)));
+        d
+    }
 
-    ui.cleaning.on_start(|power| {
+    pub fn current_settings() -> CurrentSettingsDialog {
+        let d = make(CurrentSettingsDialog::new);
+        d.on_dismiss(on(|a| a.show_settings(false)));
+        d.window().on_close_requested(|| {
+            if let Some(a) = app() {
+                a.show_settings(false);
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
+        d
+    }
+
+    pub fn color_controls() -> ColorControlsDialog {
+        let d = make(ColorControlsDialog::new);
+        refresh_on_close(d.window());
         if let Some(a) = app() {
-            a.cleaning_start(power)
+            let p = a.main.global::<Prefs>();
+            d.set_color_mode_labels(p.get_color_mode_labels());
+            d.set_gamma_labels(p.get_gamma_labels());
         }
-    });
-    ui.cleaning.on_cancel(on(|a| {
-        a.close(&a.cleaning);
-    }));
-    ui.power.on_ok(on(|a| {
-        a.close(&a.power);
-        a.run_cleaning(Cleaning::Power);
-    }));
-    // [Cancel] returns to the Head Cleaning dialog.
-    ui.power.on_cancel(on(|a| {
-        a.close(&a.power);
-        a.open(&a.cleaning);
-    }));
-    // [Print Nozzle Check Pattern] starts the Nozzle Check (state 1).
-    ui.cleaning_done.on_nozzle_check(on(|a| {
-        a.close(&a.cleaning_done);
-        a.start(Utility::NozzleCheck);
-    }));
-    ui.cleaning_done.on_finish(on(|a| {
-        a.close(&a.cleaning_done);
-    }));
-    ui.paper_guide.on_cleaning(on(|a| a.paper_guide_cleaning()));
-    ui.paper_guide.on_cancel(on(|a| {
-        a.close(&a.paper_guide);
-    }));
-    ui.message.on_ok(on(|a| {
-        a.close(&a.message);
-    }));
-    ui.message.on_details(on(|a| {
-        a.close(&a.message);
-        a.open_monitor();
-    }));
-    // "Print Queue": the GNOME printer settings show the CUPS queue.
-    ui.monitor.on_print_queue(|| launch("gnome-control-center", "printers"));
-    ui.monitor.on_ok(on(|a| {
-        a.monitor_timer.stop();
-        a.close(&a.monitor);
-    }));
-    ui.monitor.window().on_close_requested(|| {
-        if let Some(a) = app() {
-            a.monitor_timer.stop();
-        }
-        Timer::single_shot(Duration::ZERO, on(|a| a.refresh_busy()));
-        slint::CloseRequestResponse::HideWindow
-    });
-    ui.info.on_ok(on(|a| {
-        a.close(&a.info);
-    }));
-    ui.dump.on_ok(on(|a| {
-        a.close(&a.dump);
-    }));
+        d.on_ok(on(|a| a.color_controls_ok()));
+        d.on_cancel(on(|a| a.close(&*a.color_controls)));
+        d
+    }
+
+    pub fn layout_dialog() -> LayoutDialog {
+        let d = make(LayoutDialog::new);
+        refresh_on_close(d.window());
+        d.on_dismiss(on(|a| a.close(&*a.layout_dialog)));
+        d
+    }
 }
 
 #[cfg(test)]

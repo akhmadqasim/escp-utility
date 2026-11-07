@@ -285,6 +285,18 @@ No `-dev` packages are needed. fontconfig is loaded at run time
 (`fontique/fontconfig-dlopen`). The UI font is Liberation Sans 11 px, which
 stands in for Tahoma 8 pt.
 
+Windows: every window sets the Wayland app_id / X11 WM_CLASS
+`epson-l800-utility`, so GNOME groups the sheet and its dialogs as one app.
+It matches the desktop file's `StartupWMClass` and the icon name.
+- The icon is our own drawing, `ui/icons/app.svg`. Install it as
+  `~/.local/share/icons/hicolor/scalable/apps/epson-l800-utility.svg`.
+- Dialogs are created when first opened. Slint drops a dialog's window when it
+  is hidden, so only open dialogs exist on screen.
+- Every window has a fixed size (equal min/max size hints). GNOME therefore
+  offers no maximize or resize, and does not fullscreen it.
+- winit 0.30 cannot set a parent (`xdg_toplevel.set_parent`) on Wayland, so
+  dialogs are not transient children of the sheet.
+
 Desktop entry: `~/.local/share/applications/epson-l800-utility.desktop` runs the
 release binary. Its right-click action "Dry Run" starts the app with `--dry-run`.
 
