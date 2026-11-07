@@ -116,7 +116,8 @@ out (PPD UIConstraints, SETTINGS.md §1):
   control disabled and the reason in a tooltip. OK, Cancel and Close just close
   them. These are Page Order (4630), Poster Settings (4700), Margins (4750),
   Save Settings / Custom Settings (4500) and Watermark (16200). Their control
-  tables are generated from LAYOUT.json into `src/layouts.rs`. In Color
+  tables are generated from LAYOUT.json into `src/layouts.rs` and re-spaced
+  like the other dialogs (see SPEC, Screens). In Color
   Controls, Density and the Color Circle method are disabled. The preview
   picture is our own drawing, with an approximate tint.
 - Not in the UI: "User Defined" paper size, and the Linux-only CD/DVD print
@@ -344,25 +345,30 @@ Only the 7 TI bytes (offsets 49–55) depend on the clock.
 
 ### Screens
 
-Pixel sizes are client areas at 96 dpi. They come from the DLU rectangles in the
-resources, using the dialog font Tahoma 8 pt (base units 6×13 px:
-`x = MulDiv(dlu, 6, 4)`, `y = MulDiv(dlu, 13, 8)`). Each control's rectangle is
-in `ui/app.slint`.
+Pixel sizes are client areas at 96 dpi. The Windows sizes come from the DLU
+rectangles in the resources, using the dialog font Tahoma 8 pt (base units
+6×13 px: `x = MulDiv(dlu, 6, 4)`, `y = MulDiv(dlu, 13, 8)`). The dialogs keep
+the Windows controls, labels and order but are re-spaced
+(phase2/layout/TIDY-dialogs.md): 8 px margins, the icon at the top left with
+the text column at x 48, 75×23 buttons right-aligned 6 px apart and 8 px above
+the bottom, and hidden controls take no space. The wizard dialogs and the
+message box are as tall as their text, so the sizes below (Windows → here) are
+for today's texts. Each control's rectangle is in `ui/app.slint`.
 
 | Screen | Windows source | Size | Contents |
 |---|---|---|---|
 | Main window | property sheet: tabs 904, 900, 901, 902, 903 (`E_IUIRG5P`) | 459×505 (pages 443×434) | [**OK**] [Cancel] [Apply] |
 | Maintenance tab | dialog 903 | 443×434 | 6 rows (icon button 41×42, title, etched line, description), Language, Speed & Progress..., Driver Update, version |
-| Please wait... | `E_IHSRG5P` 201 | 240×65 | icon, "Please wait..." |
-| Nozzle Check 1 | 210 | 420×374 | picture, instructions, [Cancel] [**Print**] |
-| Nozzle Check 2 | 211 | 435×414 | Good / Cleaning needed samples, instructions, [Clean] [**Finish**] |
-| Head Cleaning 1 | 220 / 226 | 420×372 | instructions, (•) Cleaning ( ) Power Cleaning, [Cancel] [**Start**] |
-| Power Cleaning confirm | 360 | 435×414 | warning, transportation-lock picture, [Cancel] [**OK**] |
-| Head Cleaning progress | 223 | 420×335 | our own 12-frame animation (a wiper sweeps a streaky "A" clean; 3 frames each in black, cyan, magenta, yellow; 500 ms per frame), progress bar (status path only) |
-| Paper Guide Cleaning | 265 | 420×335 | no caption (string 1112 is absent), instructions, [Cancel] [**Cleaning**] |
-| Head Cleaning done | 224 / 227 | 420×335 | "cleaning cycle has finished" / "finished when the power light stops flashing", [**Print Nozzle Check Pattern**] [Finish] |
-| Messages | 270 / 271 | 371×197 | "A problem has occurred." [Details] [**OK**] / "… can not be completed.", "Now cleaning!" [**OK**] |
-| EPSON Status Monitor 3 | `E_IASRG5P` dialog 102, as arranged at run time (E_IAPRG5P `FUN_180033c9c`, detail mode) | 479×412 | white; status title (16 px), message box, picture, "Approximate Ink Levels" (6 tanks), note, [Print Queue] [**OK**] |
+| Please wait... | `E_IHSRG5P` 201 | 240×65 → 240×48 | icon, "Please wait..." |
+| Nozzle Check 1 | 210 | 420×374 → 420×238 | picture, instructions, [Cancel] [**Print**] |
+| Nozzle Check 2 | 211 | 435×414 → 435×243 | Good / Cleaning needed samples, instructions, [Clean] [**Finish**] |
+| Head Cleaning 1 | 220 / 226 | 420×372 → 420×256 | instructions, (•) Cleaning ( ) Power Cleaning, [Cancel] [**Start**] |
+| Power Cleaning confirm | 360 | 435×414 → 435×255 | warning, transportation-lock picture, [Cancel] [**OK**] |
+| Head Cleaning progress | 223 | 420×335 → 420×138, 420×176 with the bar | our own 12-frame animation (a wiper sweeps a streaky "A" clean; 3 frames each in black, cyan, magenta, yellow; 500 ms per frame), progress bar (status path only) |
+| Paper Guide Cleaning | 265 | 420×335 → 420×107 | no caption (string 1112 is absent), instructions, [Cancel] [**Cleaning**] |
+| Head Cleaning done | 224 / 227 | 420×335 → 420×105 | "cleaning cycle has finished" / "finished when the power light stops flashing", [**Print Nozzle Check Pattern**] [Finish] |
+| Messages | 270 / 271 | 371×197 → 371×91 | "A problem has occurred." [Details] [**OK**] / "… can not be completed.", "Now cleaning!" [**OK**] |
+| EPSON Status Monitor 3 | `E_IASRG5P` dialog 102, as arranged at run time (E_IAPRG5P `FUN_180033c9c`, detail mode) | 479×412 → 479×327 | white; status title (16 px) where Epson's banner was, message box, picture, "Approximate Ink Levels" (6 tanks), note, [Print Queue] [**OK**] |
 | Printer and Option Information / dry-run hexdump | size of 5050 | 485×505 | read-only text, [OK] |
 
 The **bold** button is the default (drawn as the highlighted button, run by Return), as set at run time by `FUN_00425ef8`. Escape runs Cancel or Finish.

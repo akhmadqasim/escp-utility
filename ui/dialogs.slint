@@ -1,5 +1,6 @@
 // Printing Preferences sub-dialogs (E_IUIRG5P popups, LAYOUT.json
-// printing_preferences.subdialogs), at their pixel rectangles.
+// printing_preferences.subdialogs): the Windows controls and sizes,
+// re-spaced per phase2/layout/TIDY-dialogs.md.
 //
 // - ColorControlsDialog (4300): working, mapped to the PPD colour options.
 // - LayoutDialog: any other sub-dialog drawn from a control table (src/layouts.rs)
@@ -59,11 +60,14 @@ component ColorSlider inherits Rectangle {
     if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
 }
 
-// Dialog 4300 "Color Controls" (370x305 DLU = 555x496 px), Advanced >
+// Dialog 4300 "Color Controls" (Windows 555x496 px), Advanced >
 // Color Management > Settings... Slide Bar mode: Color Mode, Gamma,
 // Brightness, Contrast, Saturation, Cyan, Magenta, Yellow map to the PPD
 // options CorrectionColor, GammaValue, BrightnessValue, ContrastValue,
 // SaturationValue, CyanValue, MagentaValue, YellowValue (-25..25).
+// Re-spaced per TIDY-dialogs.md: 8 px margins, slider rows 40 px apart,
+// buttons right-aligned. Color Circle stays off, so its rows take no space
+// and the window is 555x405.
 export component ColorControlsDialog inherits UtilityWindow {
     in property <[string]> color-mode-labels;
     in property <[string]> gamma-labels;
@@ -80,14 +84,14 @@ export component ColorControlsDialog inherits UtilityWindow {
     property <bool> vivid: root.color-mode == 1;
     title: "Color Controls";
     width: 555px;
-    height: 496px;
+    height: 405px;
     default-action => { root.ok(); }
     cancel-action => { root.cancel(); }
 
-    Group { x: 8px; y: 7px; width: 539px; height: 447px; title: "Color Controls"; page: #f0f0f0; }
-    DlgText { x: 20px; y: 67px; width: 108px; height: 16px; text: "Color Mode"; wrap: no-wrap; }
+    Group { x: 8px; y: 8px; width: 539px; height: 358px; title: "Color Controls"; page: #f0f0f0; }
+    DlgText { x: 16px; y: 28px; width: 243px; height: 13px; text: "Color Mode"; wrap: no-wrap; }
     Combo {
-        x: 20px; y: 85px; width: 239px;
+        x: 16px; y: 44px; width: 243px;
         model: root.color-mode-labels;
         current-index <=> root.color-mode;
         selected => {
@@ -97,19 +101,20 @@ export component ColorControlsDialog inherits UtilityWindow {
             }
         }
     }
-    DlgText { x: 20px; y: 115px; width: 50px; height: 16px; text: "Gamma"; wrap: no-wrap; }
+    DlgText { x: 16px; y: 73px; width: 243px; height: 13px; text: "Gamma"; wrap: no-wrap; }
     Combo {
-        x: 20px; y: 133px; width: 239px;
+        x: 16px; y: 89px; width: 243px;
         model: root.gamma-labels;
         current-index <=> root.gamma;
         enabled: !root.vivid;
         tip: root.vivid ? Strings.gamma-vivid : "";
     }
-    Group { x: 18px; y: 164px; width: 240px; height: 52px; title: "Color Adjustment Method"; page: #f0f0f0; }
-    Radio { x: 32px; y: 187px; width: 86px; height: 16px; text: "Color Circle"; enabled: false; tip: "The Linux driver takes the slide-bar values only."; }
-    Radio { x: 147px; y: 187px; width: 96px; height: 16px; text: "Slide Bar"; checked: true; }
+    Group { x: 16px; y: 116px; width: 243px; height: 46px; title: "Color Adjustment Method"; page: #f0f0f0; }
+    Radio { x: 24px; y: 136px; width: 86px; height: 16px; text: "Color Circle"; enabled: false; tip: "The Linux driver takes the slide-bar values only."; }
+    Radio { x: 140px; y: 136px; width: 96px; height: 16px; text: "Slide Bar"; checked: true; }
+    // Bottom-aligned with the photo captions.
     DlgButton {
-        x: 162px; y: 224px; width: 93px; height: 23px; text: "Reset Controls";
+        x: 166px; y: 180px; width: 93px; height: 23px; text: "Reset Controls";
         clicked => {
             root.brightness = 0;
             root.contrast = 0;
@@ -119,18 +124,19 @@ export component ColorControlsDialog inherits UtilityWindow {
             root.yellow = 0;
         }
     }
-    // Left column: Brightness, Contrast, Saturation, Density (y 255, 307, 359, 411).
-    ColorSlider { x: 0; y: 255px; width: 270px; height: 30px; label: "Brightness"; value <=> root.brightness; label-x: 21px; box-x: 74px; slider-x: 117px; }
-    ColorSlider { x: 0; y: 307px; width: 270px; height: 30px; label: "Contrast"; value <=> root.contrast; label-x: 21px; box-x: 74px; slider-x: 117px; }
-    ColorSlider { x: 0; y: 359px; width: 270px; height: 30px; label: "Saturation"; value <=> root.saturation; label-x: 21px; box-x: 74px; slider-x: 117px; }
-    ColorSlider { x: 0; y: 411px; width: 270px; height: 30px; label: "Density"; enabled: false; tip: Strings.no-linux; label-x: 21px; box-x: 74px; slider-x: 117px; }
-    // Right column (Slide Bar mode): Cyan, Magenta, Yellow (y 255, 307, 359).
-    ColorSlider { x: 0; y: 255px; width: 555px; height: 30px; label: "Cyan"; value <=> root.cyan; label-x: 302px; box-x: 354px; slider-x: 398px; }
-    ColorSlider { x: 0; y: 307px; width: 555px; height: 30px; label: "Magenta"; value <=> root.magenta; label-x: 302px; box-x: 354px; slider-x: 398px; }
-    ColorSlider { x: 0; y: 359px; width: 555px; height: 30px; label: "Yellow"; value <=> root.yellow; label-x: 302px; box-x: 354px; slider-x: 398px; }
-    // Owner-draw colour chips 4352-4354 (278, y, 17x18).
+    // Left column: Brightness, Contrast, Saturation, Density; right column
+    // (Slide Bar mode): Cyan, Magenta, Yellow. Rows 40 px apart (value boxes
+    // at y 218, 258, 298, 338).
+    ColorSlider { x: 0; y: 215px; width: 270px; height: 30px; label: "Brightness"; value <=> root.brightness; label-x: 16px; box-x: 74px; slider-x: 117px; }
+    ColorSlider { x: 0; y: 255px; width: 270px; height: 30px; label: "Contrast"; value <=> root.contrast; label-x: 16px; box-x: 74px; slider-x: 117px; }
+    ColorSlider { x: 0; y: 295px; width: 270px; height: 30px; label: "Saturation"; value <=> root.saturation; label-x: 16px; box-x: 74px; slider-x: 117px; }
+    ColorSlider { x: 0; y: 335px; width: 270px; height: 30px; label: "Density"; enabled: false; tip: Strings.no-linux; label-x: 16px; box-x: 74px; slider-x: 117px; }
+    ColorSlider { x: 0; y: 215px; width: 555px; height: 30px; label: "Cyan"; value <=> root.cyan; label-x: 302px; box-x: 354px; slider-x: 398px; }
+    ColorSlider { x: 0; y: 255px; width: 555px; height: 30px; label: "Magenta"; value <=> root.magenta; label-x: 302px; box-x: 354px; slider-x: 398px; }
+    ColorSlider { x: 0; y: 295px; width: 555px; height: 30px; label: "Yellow"; value <=> root.yellow; label-x: 302px; box-x: 354px; slider-x: 398px; }
+    // Owner-draw colour chips 4352-4354 (17x18).
     for chip[i] in [#00a0e0, #d0168c, #f0c800]: Rectangle {
-        x: 278px; y: 258px + i * 54px; width: 17px; height: 18px;
+        x: 278px; y: 218px + i * 40px; width: 17px; height: 18px;
         background: chip;
         border-width: 1px;
         border-color: #7a7a7a;
@@ -155,9 +161,9 @@ export component ColorControlsDialog inherits UtilityWindow {
     }
     DlgText { x: 425px; y: 190px; width: 83px; height: 13px; text: "<Preview>"; horizontal-alignment: center; wrap: no-wrap; }
 
-    DlgButton { x: 306px; y: 463px; width: 69px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
-    DlgButton { x: 393px; y: 463px; width: 69px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
-    DlgButton { x: 480px; y: 463px; width: 69px; height: 23px; text: "Help"; enabled: false; tip: Strings.no-help; }
+    DlgButton { x: 310px; y: 374px; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
+    DlgButton { x: 391px; y: 374px; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: 472px; y: 374px; width: 75px; height: 23px; text: "Help"; enabled: false; tip: Strings.no-help; }
 }
 
 export enum LayoutKind { Text, CText, Group, Check, Radio, Combo, Edit, Button, Slider, List, Frame, Line, UpDown }

@@ -6,8 +6,9 @@
 //   E_IHSRG5P.DLL dialogs 201, 210, 211, 226 (= 220), 227 (= 224), 271, 360
 // All templates use FONT 8, "MS Shell Dlg 2" = Tahoma 8 pt, whose dialog base
 // units are 6 x 13 px, so px_x = MulDiv(dlu_x, 6, 4) and px_y = MulDiv(dlu_y, 13, 8)
-// (each field rounded on its own, like USER32). The px values below are the
-// ones in phase2/layout/LAYOUT.md; the DLU rectangles are in the comments.
+// (each field rounded on its own, like USER32). The Maintenance tab uses the
+// px values in phase2/layout/LAYOUT.md; the dialogs are re-spaced (see
+// "Utility dialogs" below).
 //
 // Button, tab and title labels are the Windows (English) strings. The long
 // paragraphs are our own wording, set from Rust (src/main.rs).
@@ -285,9 +286,9 @@ export component CurrentSettingsDialog inherits UtilityWindow {
     height: 496px;
     default-action => { root.dismiss(); }
     cancel-action => { root.dismiss(); }
-    // 4051 BLACKFRAME (1,1,140x273 DLU)
+    // 4051 BLACKFRAME
     Rectangle {
-        x: 2px; y: 2px; width: 210px; height: 444px;
+        x: 8px; y: 8px; width: 197px; height: 429px;
         background: #ffffff;
         border-width: 1px;
         border-color: #000000;
@@ -300,8 +301,8 @@ export component CurrentSettingsDialog inherits UtilityWindow {
             DlgText { x: 8px; y: 14px; width: parent.width - 8px; height: 13px; text: l.value; wrap: no-wrap; overflow: elide; }
         }
     }
-    CheckBox { x: 9px; y: 453px; width: 195px; height: 13px; text: "Always show current settings."; enabled: false; tip: Strings.windows-only; }
-    DlgButton { x: 150px; y: 475px; width: 60px; height: 23px; text: "Close"; clicked => { root.dismiss(); } }
+    CheckBox { x: 8px; y: 443px; width: 197px; height: 16px; text: "Always show current settings."; enabled: false; tip: Strings.windows-only; }
+    DlgButton { x: 130px; y: 465px; width: 75px; height: 23px; text: "Close"; clicked => { root.dismiss(); } }
 }
 
 // ---------------------------------------------------------------------------
@@ -309,137 +310,151 @@ export component CurrentSettingsDialog inherits UtilityWindow {
 // Buttons: 1153 OK, 1154 Print, 1155/1185 Finish, 1156 Clean, 1157/1184 Cancel,
 // 1158 Start, 1159 Print Nozzle Check Pattern. Default buttons follow
 // FUN_00425ef8 as traced in phase2/rea/NOTES.md.
+//
+// Same controls as the Windows templates, re-spaced (phase2/layout/
+// TIDY-dialogs.md): 8 px margins, the 32 px icon at the top left with the
+// text column at x 48, pictures centred above it, 75x23 buttons right-aligned
+// 6 px apart, 16 px below the last content and 8 px above the bottom. Hidden
+// controls take no space, and each window is as tall as its text.
 
-// Dialog 201 (160x40 DLU = 240x65 px): modeless "Please wait..." popup (4250).
+// Dialog 201 (Windows 240x65 px): modeless "Please wait..." popup (4250).
 export component WaitDialog inherits UtilityWindow {
     in property <string> utility: "Nozzle Check";
     in property <image> glyph: @image-url("icons/nozzle-check.svg");
     title: root.utility;
     width: 240px;
-    height: 65px;
-    DlgIcon { x: 15px; y: 16px; source: root.glyph; }
-    DlgText { x: 60px; y: 24px; width: 150px; height: 49px; text: "Please wait..."; }
+    height: 48px;
+    DlgIcon { x: 8px; y: 8px; source: root.glyph; }
+    DlgText { x: 48px; y: 18px; width: 184px; height: 13px; text: "Please wait..."; wrap: no-wrap; }
 }
 
-// Dialog 210 (280x230 DLU = 420x374 px): Nozzle Check, step 1.
+// Dialog 210 (Windows 420x374 px): Nozzle Check, step 1.
 // FUN_00429db8: 517 picture, 525 instructions (4210), 500 "Cancel", 501 "Print" (default).
 export component NozzleCheckDialog inherits UtilityWindow {
     in property <string> body;
     callback print();
     callback cancel();
+    property <length> buttons-y: t.y + t.height + 16px;
     title: "Nozzle Check";
     width: 420px;
-    height: 374px;
+    height: root.buttons-y + 31px;
     default-action => { root.print(); }
     cancel-action => { root.cancel(); }
-    DlgIcon { x: 6px; y: 146px; source: @image-url("icons/nozzle-check.svg"); }
-    // 517 (86,7,108x80 DLU = 129,11,162x130): picture centred at native size 76x72.
-    Image { x: 129px + 43px; y: 11px + 29px; width: 76px; height: 72px; source: @image-url("icons/printer.svg"); }
-    DlgText { x: 45px; y: 150px; width: 339px; height: 180px; text: root.body; }
-    DlgButton { x: 237px; y: 332px; width: 84px; height: 29px; text: "Cancel"; clicked => { root.cancel(); } }
-    DlgButton { x: 327px; y: 332px; width: 84px; height: 29px; text: "Print"; primary: true; clicked => { root.print(); } }
+    // 517: picture centred over the dialog.
+    Image { x: 172px; y: 8px; width: 76px; height: 72px; source: @image-url("icons/printer.svg"); }
+    DlgIcon { x: 8px; y: 90px; source: @image-url("icons/nozzle-check.svg"); }
+    t := DlgText { x: 48px; y: 92px; width: 364px; height: max(30px, self.preferred-height); text: root.body; }
+    DlgButton { x: 256px; y: root.buttons-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: 337px; y: root.buttons-y; width: 75px; height: 23px; text: "Print"; primary: true; clicked => { root.print(); } }
 }
 
-// Dialog 211 (290x255 DLU = 435x414 px): Nozzle Check, step 2.
+// Dialog 211 (Windows 435x414 px): Nozzle Check, step 2.
 // FUN_004296e0: samples 518/519, 535 "Good" (4212), 536 "Cleaning needed" (4213),
 // 525 instructions (4211), 501 "Clean", 500 "Finish" (default).
 export component NozzleResultDialog inherits UtilityWindow {
     in property <string> body;
     callback clean();
     callback finish();
+    property <length> buttons-y: max(196px, t.y + t.height) + 16px;
     title: "Nozzle Check";
     width: 435px;
-    height: 414px;
+    height: root.buttons-y + 31px;
     default-action => { root.finish(); }
     cancel-action => { root.finish(); }
-    // 518/519 (420x98 px): sample bitmaps 348x42 centred at offset (36,28).
-    Image { x: 8px + 36px; y: 5px + 28px; width: 348px; height: 42px; source: @image-url("icons/nozzle-good.svg"); }
-    DlgText { x: 6px; y: 106px; width: 416px; height: 23px; text: "Good"; horizontal-alignment: center; }
-    Image { x: 8px + 36px; y: 138px + 28px; width: 348px; height: 42px; source: @image-url("icons/nozzle-bad.svg"); }
-    DlgText { x: 6px; y: 239px; width: 416px; height: 23px; text: "Cleaning needed"; horizontal-alignment: center; }
-    DlgIcon { x: 6px; y: 271px; source: @image-url("icons/nozzle-check.svg"); }
-    DlgText { x: 51px; y: 275px; width: 366px; height: 93px; text: root.body; }
-    DlgButton { x: 252px; y: 374px; width: 84px; height: 29px; text: "Clean"; clicked => { root.clean(); } }
-    DlgButton { x: 342px; y: 374px; width: 84px; height: 29px; text: "Finish"; primary: true; clicked => { root.finish(); } }
+    // 518/519 (8,y,419x50): the 348x42 samples centred.
+    Image { x: 43px; y: 12px; width: 348px; height: 42px; source: @image-url("icons/nozzle-good.svg"); }
+    DlgText { x: 8px; y: 62px; width: 419px; height: 13px; text: "Good"; horizontal-alignment: center; }
+    Image { x: 43px; y: 87px; width: 348px; height: 42px; source: @image-url("icons/nozzle-bad.svg"); }
+    DlgText { x: 8px; y: 137px; width: 419px; height: 13px; text: "Cleaning needed"; horizontal-alignment: center; }
+    DlgIcon { x: 8px; y: 164px; source: @image-url("icons/nozzle-check.svg"); }
+    t := DlgText { x: 48px; y: 166px; width: 379px; height: self.preferred-height; text: root.body; }
+    DlgButton { x: 271px; y: root.buttons-y; width: 75px; height: 23px; text: "Clean"; clicked => { root.clean(); } }
+    DlgButton { x: 352px; y: root.buttons-y; width: 75px; height: 23px; text: "Finish"; primary: true; clicked => { root.finish(); } }
 }
 
-// Dialog 226 (= 220, 280x229 DLU = 420x372 px): Head Cleaning, step 1, no-status variant.
+// Dialog 226 (= 220, Windows 420x372 px): Head Cleaning, step 1, no-status variant.
 // FUN_00411038: 525 instructions (4201), radios 513 "Cleaning" (10470, default)
-// and 514 "Power Cleaning" (10471) from RCDATA 10460, description statics
-// 528/529 stay empty, 501 "Cancel", 500 "Start" (default).
+// and 514 "Power Cleaning" (10471) from RCDATA 10460. The description statics
+// 528/529 stay empty, so they take no space. 501 "Cancel", 500 "Start" (default).
 export component HeadCleaningDialog inherits UtilityWindow {
     in property <string> body;
     in-out property <bool> power;
     callback start(bool);
     callback cancel();
+    property <length> radio-y: max(40px, t.y + t.height) + 12px;
+    property <length> buttons-y: root.radio-y + 22px + 16px + 16px;
     title: "Head Cleaning";
     width: 420px;
-    height: 372px;
+    height: root.buttons-y + 31px;
     default-action => { root.start(root.power); }
     cancel-action => { root.cancel(); }
-    DlgIcon { x: 6px; y: 179px; source: @image-url("icons/head-cleaning.svg"); }
-    DlgText { x: 45px; y: 11px; width: 339px; height: 169px; text: root.body; }
+    DlgIcon { x: 8px; y: 8px; source: @image-url("icons/head-cleaning.svg"); }
+    t := DlgText { x: 48px; y: 10px; width: 364px; height: self.preferred-height; text: root.body; }
     Radio {
-        x: 60px; y: 202px; width: 348px; height: 29px;
+        x: 48px; y: root.radio-y; width: 364px; height: 16px;
         text: "Cleaning";
         checked: !root.power;
         picked => { root.power = false; }
     }
     Radio {
-        x: 60px; y: 263px; width: 348px; height: 29px;
+        x: 48px; y: root.radio-y + 22px; width: 364px; height: 16px;
         text: "Power Cleaning";
         checked: root.power;
         picked => { root.power = true; }
     }
-    DlgButton { x: 237px; y: 332px; width: 84px; height: 29px; text: "Cancel"; clicked => { root.cancel(); } }
-    DlgButton { x: 327px; y: 332px; width: 84px; height: 29px; text: "Start"; primary: true; clicked => { root.start(root.power); } }
+    DlgButton { x: 256px; y: root.buttons-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: 337px; y: root.buttons-y; width: 75px; height: 23px; text: "Start"; primary: true; clicked => { root.start(root.power); } }
 }
 
-// Dialog 360 (290x255 DLU = 435x414 px): Power Cleaning confirmation.
+// Dialog 360 (Windows 435x414 px): Power Cleaning confirmation.
 // FUN_0043ff54: 525 warning (10553), 585 illustration of the transportation
 // lock, 501 "Cancel" (back to step 1), 500 "OK" (default).
 export component PowerCleaningDialog inherits UtilityWindow {
     in property <string> body;
     callback ok();
     callback cancel();
+    // 585 (8,y,419x124) under the text; the 160x120 picture centred in it.
+    property <length> picture-y: max(40px, t.y + t.height) + 12px;
+    property <length> buttons-y: root.picture-y + 124px + 16px;
     title: "Head Cleaning";
     width: 435px;
-    height: 414px;
+    height: root.buttons-y + 31px;
     default-action => { root.ok(); }
     cancel-action => { root.cancel(); }
-    DlgIcon { x: 6px; y: 28px; source: @image-url("icons/head-cleaning.svg"); }
-    DlgText { x: 51px; y: 31px; width: 366px; height: 109px; text: root.body; }
-    // 585 (8,140,420x195 px): bitmap 160x120 centred at offset (130,37).
+    DlgIcon { x: 8px; y: 8px; source: @image-url("icons/head-cleaning.svg"); }
+    t := DlgText { x: 48px; y: 10px; width: 379px; height: self.preferred-height; text: root.body; }
     // Our picture and its two labels stay inside the 160x120 bitmap box, like Windows.
     Rectangle {
-        x: 8px + 130px; y: 140px + 37px; width: 160px; height: 120px;
+        x: 137px; y: root.picture-y + 2px; width: 160px; height: 120px;
         Image { width: 100%; height: 100%; source: @image-url("icons/transport-lock.svg"); }
         Text { x: 100px; y: 2px; width: 60px; text: "Printing"; font-size: 10px; color: #3a7bd5; horizontal-alignment: right; }
         Text { x: 100px; y: 106px; width: 60px; text: "Transport"; font-size: 10px; color: #6a7078; horizontal-alignment: right; }
     }
-    DlgButton { x: 252px; y: 374px; width: 84px; height: 29px; text: "Cancel"; clicked => { root.cancel(); } }
-    DlgButton { x: 342px; y: 374px; width: 84px; height: 29px; text: "OK"; primary: true; clicked => { root.ok(); } }
+    DlgButton { x: 271px; y: root.buttons-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: 352px; y: root.buttons-y; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
 }
 
-// Dialog 227 (= 224, 280x206 DLU = 420x335 px): Head Cleaning finished, no-status variant.
-// FUN_0040f2fc: picture 517 hidden, 525 = 4205 (no status reply),
-// 503 "Print Nozzle Check Pattern" (default), 500 "Finish".
+// Dialog 227 (= 224, Windows 420x335 px): Head Cleaning finished.
+// FUN_0040f2fc: picture 517 hidden (no space), 525 = 4204 / 4205,
+// 503 "Print Nozzle Check Pattern" (default), 500 "Finish". The text box is
+// at least 48 px (4 lines), so 224 and 227 come out the same size.
 export component CleaningDoneDialog inherits UtilityWindow {
     in property <string> body;
     callback nozzle-check();
     callback finish();
+    property <length> buttons-y: t.y + t.height + 16px;
     title: "Head Cleaning";
     width: 420px;
-    height: 335px;
+    height: root.buttons-y + 31px;
     default-action => { root.nozzle-check(); }
     cancel-action => { root.finish(); }
-    DlgIcon { x: 6px; y: 146px; source: @image-url("icons/head-cleaning.svg"); }
-    DlgText { x: 45px; y: 130px; width: 339px; height: 141px; text: root.body; }
-    DlgButton { x: 78px; y: 293px; width: 243px; height: 29px; text: "Print Nozzle Check Pattern"; primary: true; clicked => { root.nozzle-check(); } }
-    DlgButton { x: 327px; y: 293px; width: 84px; height: 29px; text: "Finish"; clicked => { root.finish(); } }
+    DlgIcon { x: 8px; y: 8px; source: @image-url("icons/head-cleaning.svg"); }
+    t := DlgText { x: 48px; y: 10px; width: 364px; height: max(48px, self.preferred-height); text: root.body; }
+    DlgButton { x: 171px; y: root.buttons-y; width: 160px; height: 23px; text: "Print Nozzle Check Pattern"; primary: true; clicked => { root.nozzle-check(); } }
+    DlgButton { x: 337px; y: root.buttons-y; width: 75px; height: 23px; text: "Finish"; clicked => { root.finish(); } }
 }
 
-// Dialog 265 (280x206 DLU = 420x335 px): Paper Guide Cleaning.
+// Dialog 265 (Windows 420x335 px): Paper Guide Cleaning.
 // FUN_0042c3d0: 516 icon (group icon 1005), 525 instructions (4220),
 // 501 "Cancel", 500 "Cleaning" (1182, default). The caption string 1112 is
 // absent from E_IHSRG5P, so Windows shows an empty title.
@@ -447,21 +462,21 @@ export component PaperGuideDialog inherits UtilityWindow {
     in property <string> body;
     callback cleaning();
     callback cancel();
+    property <length> buttons-y: t.y + t.height + 16px;
     title: "";
     width: 420px;
-    height: 335px;
+    height: root.buttons-y + 31px;
     default-action => { root.cleaning(); }
     cancel-action => { root.cancel(); }
-    DlgIcon { x: 6px; y: 146px; source: @image-url("icons/paper-guide.svg"); }
-    DlgText { x: 50px; y: 117px; width: 350px; height: 169px; text: root.body; }
-    DlgButton { x: 195px; y: 293px; width: 84px; height: 29px; text: "Cancel"; clicked => { root.cancel(); } }
-    DlgButton { x: 285px; y: 293px; width: 126px; height: 29px; text: "Cleaning"; primary: true; clicked => { root.cleaning(); } }
+    DlgIcon { x: 8px; y: 8px; source: @image-url("icons/paper-guide.svg"); }
+    t := DlgText { x: 48px; y: 10px; width: 364px; height: max(48px, self.preferred-height); text: root.body; }
+    DlgButton { x: 256px; y: root.buttons-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: 337px; y: root.buttons-y; width: 75px; height: 23px; text: "Cleaning"; primary: true; clicked => { root.cleaning(); } }
 }
 
-// Dialog 270 / 271 (247x121 DLU = 371x197 px): message box.
-// 516 (10,10), 525 (40,8,200x48), 526 (40,56,200x35).
-// 271: IDOK (86,96,75x18). 270 (status errors): 508 [Details] (40,96,70x18)
-// and IDOK (135,96,70x18); Details opens Status Monitor 3.
+// Dialog 270 / 271 (Windows 371x197 px): message box. 525 heading, 526
+// text under it (both as tall as their text), then the buttons.
+// 271: OK. 270 (status errors): [Details] [OK]; Details opens Status Monitor 3.
 export component MessageDialog inherits UtilityWindow {
     in property <string> utility;
     in property <string> heading;
@@ -470,24 +485,17 @@ export component MessageDialog inherits UtilityWindow {
     in property <image> glyph: @image-url("icons/nozzle-check.svg");
     callback ok();
     callback details();
+    property <length> buttons-y: max(40px, root.body == "" ? h.y + h.height : b.y + b.height) + 16px;
     title: root.utility;
     width: 371px;
-    height: 197px;
+    height: root.buttons-y + 31px;
     default-action => { root.ok(); }
     cancel-action => { root.ok(); }
-    DlgIcon { x: 15px; y: 16px; source: root.glyph; }
-    DlgText { x: 60px; y: 13px; width: 300px; height: 78px; text: root.heading; }
-    DlgText { x: 60px; y: 91px; width: 300px; height: 57px; text: root.body; }
-    if root.show-details: DlgButton { x: 60px; y: 156px; width: 105px; height: 29px; text: "Details"; clicked => { root.details(); } }
-    DlgButton {
-        x: root.show-details ? 203px : 129px;
-        y: 156px;
-        width: root.show-details ? 105px : 113px;
-        height: 29px;
-        text: "OK";
-        primary: true;
-        clicked => { root.ok(); }
-    }
+    DlgIcon { x: 8px; y: 8px; source: root.glyph; }
+    h := DlgText { x: 48px; y: 10px; width: 315px; height: self.preferred-height; text: root.heading; }
+    b := DlgText { x: 48px; y: h.y + h.height + 8px; width: 315px; height: self.preferred-height; text: root.body; }
+    if root.show-details: DlgButton { x: 207px; y: root.buttons-y; width: 75px; height: 23px; text: "Details"; clicked => { root.details(); } }
+    DlgButton { x: 288px; y: root.buttons-y; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
 }
 
 // Our own cleaning animation for dialog 223 (Windows uses 12 bitmaps,
@@ -527,10 +535,11 @@ component CleaningAnimation inherits Rectangle {
     Rectangle { x: 50px; y: 60px; width: 6px; height: 6px; border-radius: 3px; background: #505a66; }
 }
 
-// Dialog 223 (280x206 DLU = 420x335 px): Head Cleaning in progress.
+// Dialog 223 (Windows 420x335 px): Head Cleaning in progress.
 // FUN_004123b8: 525 "Please wait..." (4202), 517 animation (12 frames,
-// 500 ms), all buttons hidden. FUN_00412ae8: once cleaning starts, 525 =
-// 4203 and the custom-painted bar 520 (29,93,212x14 DLU) appears.
+// 500 ms), all buttons hidden (no space, 8 px bottom margin). FUN_00412ae8:
+// once cleaning starts, 525 = 4203 and the progress bar 520 appears in the
+// text column; until then the text sits beside the icon.
 export component ProgressDialog inherits UtilityWindow {
     in property <string> body;
     in property <bool> bar-visible;
@@ -539,10 +548,10 @@ export component ProgressDialog inherits UtilityWindow {
     in-out property <int> frame;
     title: "Head Cleaning";
     width: 420px;
-    height: 335px;
-    DlgIcon { x: 6px; y: 146px; source: @image-url("icons/head-cleaning.svg"); }
-    // 517 (129,11,162x130 px): 12 frames, 106x64, centred at (157,44).
-    CleaningAnimation { x: 157px; y: 44px; frame: root.frame; }
+    height: max(120px, t.y + t.height) + 8px;
+    DlgIcon { x: 8px; y: 88px; source: @image-url("icons/head-cleaning.svg"); }
+    // 517 (8,8,404x72): 12 frames, 106x64, centred.
+    CleaningAnimation { x: 157px; y: 12px; frame: root.frame; }
     // Timer id 4: next frame every 500 ms while the dialog is open (FUN_00412da4;
     // main.rs sets animate while 223 is shown).
     Timer {
@@ -551,10 +560,10 @@ export component ProgressDialog inherits UtilityWindow {
         triggered => { root.frame = Math.mod(root.frame + 1, 12); }
     }
     if root.bar-visible: Rectangle {
-        x: 44px;
-        y: 151px;
-        width: 318px;
-        height: 23px;
+        x: 48px;
+        y: 93px;
+        width: 364px;
+        height: 22px;
         background: #ffffff;
         border-width: 1px;
         border-color: #a0a0a0;
@@ -566,7 +575,7 @@ export component ProgressDialog inherits UtilityWindow {
             background: #0078d7;
         }
     }
-    DlgText { x: 45px; y: 187px; width: 339px; height: 98px; text: root.body; }
+    t := DlgText { x: 48px; y: root.bar-visible ? 128px : 90px; width: 364px; height: max(40px, self.preferred-height); text: root.body; }
 }
 
 // Read-only text window, the size of dialog 5050 "Printer and Option
@@ -600,9 +609,11 @@ export component TextDialog inherits UtilityWindow {
 
 // EPSON Status Monitor 3, E_IASRG5P dialog 102 (319x419 DLU template),
 // as Windows arranges it when opened from the Maintenance tab
-// (E_IAPRG5P FUN_180033c9c, "detail" mode). Views status + ink levels +
-// buttons are stacked, giving a 479x412 px client on a white background.
-// Rectangles from phase2/layout/LAYOUT.json "sm3.runtime.detail".
+// (E_IAPRG5P FUN_180033c9c, "detail" mode): status, ink levels and buttons
+// stacked on a white background. Windows: 479x412 px client, from
+// phase2/layout/LAYOUT.json "sm3.runtime.detail"; re-spaced per
+// TIDY-dialogs.md. Epson's banner bitmap 377 is not drawn, so the title
+// takes its place.
 export component StatusMonitorDialog inherits UtilityWindow {
     in property <string> printer: "L800";
     in property <string> title-text;
@@ -614,26 +625,25 @@ export component StatusMonitorDialog inherits UtilityWindow {
     callback print-queue();
     title: "EPSON Status Monitor 3 : " + root.printer;
     width: 479px;
-    height: 412px;
+    height: 327px;
     background: #ffffff;
     default-action => { root.ok(); }
     cancel-action => { root.ok(); }
-    // 377 (8,8,120x42) is Epson's banner bitmap: the space stays empty.
-    // 384 short status title (135,8,336x41), LTEXT (top-aligned), Tahoma 12 pt.
-    DlgText { x: 135px; y: 8px; width: 336px; height: 41px; text: root.title-text; font-size: 16px; }
-    // 212 read-only multi-line EDIT (8,57,336x97) with WS_BORDER|WS_VSCROLL:
+    // 384 short status title, Tahoma 12 pt.
+    DlgText { x: 8px; y: 8px; width: 463px; height: 19px; text: root.title-text; font-size: 16px; wrap: no-wrap; overflow: elide; }
+    // 212 read-only multi-line EDIT with WS_BORDER|WS_VSCROLL:
     // the 17 px scroll bar strip is always there (inactive while the text fits).
     Rectangle {
-        x: 8px; y: 57px; width: 336px; height: 97px;
+        x: 8px; y: 35px; width: 336px; height: 98px;
         background: #ffffff;
         border-width: 1px;
         border-color: #828790;
         DlgText { x: 4px; y: 3px; width: parent.width - 1px - 17px - 6px; height: parent.height - 6px; text: root.body; }
         Rectangle { x: parent.width - 1px - 17px; y: 1px; width: 17px; height: parent.height - 2px; background: #f0f0f0; }
     }
-    // 210 printer picture (351,57,120x98): WS_BORDER (1 px black) + SS_SUNKEN.
+    // 210 printer picture: WS_BORDER (1 px black) + SS_SUNKEN.
     Rectangle {
-        x: 351px; y: 57px; width: 120px; height: 98px;
+        x: 351px; y: 35px; width: 120px; height: 98px;
         border-width: 1px;
         border-color: #000000;
         Rectangle { x: 1px; y: 1px; width: parent.width - 2px; height: 1px; background: #a0a0a0; }
@@ -642,29 +652,29 @@ export component StatusMonitorDialog inherits UtilityWindow {
         Rectangle { x: parent.width - 2px; y: 1px; width: 1px; height: parent.height - 2px; background: #ffffff; }
         Image { x: (parent.width - 76px) / 2; y: (parent.height - 72px) / 2; width: 76px; height: 72px; source: @image-url("icons/printer.svg"); }
     }
-    // 30602 group box "Approximate Ink Levels" (8,195,464x172).
+    // 30602 group box "Approximate Ink Levels" (8,139,463x149), 6 px below the message.
     Rectangle {
-        x: 8px; y: 201px; width: 464px; height: 166px;
+        x: 8px; y: 145px; width: 463px; height: 143px;
         border-width: 1px;
         border-color: #c8c8c8;
         border-radius: 3px;
     }
-    Rectangle { x: 14px; y: 195px; width: 130px; height: 14px; background: #ffffff;
+    Rectangle { x: 14px; y: 139px; width: 130px; height: 14px; background: #ffffff;
         DlgText { x: 3px; text: "Approximate Ink Levels"; wrap: no-wrap; }
     }
-    // Meters 390-395 (x 33 + 73.4n, 211, 45x68) and names 2700-2705 (x 20 + 73.4n, 288, 72x26).
+    // Meters 390-395 (45x68) and names 2700-2705 6 px under them.
     for ink[n] in root.inks: Rectangle {
-        property <[length]> xs: [20px, 93px, 167px, 240px, 314px, 387px];
-        x: self.xs[n];
-        y: 211px;
+        property <[length]> xs: [33px, 107px, 180px, 254px, 327px, 401px];
+        x: self.xs[n] - 13px;
+        y: 159px;
         width: 72px;
-        height: 103px;
+        height: 100px;
         InkMeter { x: 13px; y: 0; width: 45px; height: 68px; ink: ink; }
-        DlgText { x: 0; y: 77px; width: 72px; height: 26px; text: ink.name; horizontal-alignment: center; }
+        DlgText { x: 0; y: 74px; width: 72px; height: 26px; text: ink.name; horizontal-alignment: center; }
     }
-    // 30601 note (15,325,428x39).
-    DlgText { x: 15px; y: 325px; width: 428px; height: 39px; text: root.note; }
-    // 410 "Print Queue" (8,379,113x23) and IDOK "OK" (209,379,83x23, default).
-    DlgButton { x: 8px; y: 379px; width: 113px; height: 23px; text: "Print Queue"; clicked => { root.print-queue(); } }
-    DlgButton { x: 209px; y: 379px; width: 83px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
+    // 30601 note, 8 px above the group bottom.
+    DlgText { x: 16px; y: 254px; width: 447px; height: 26px; text: root.note; }
+    // 410 "Print Queue" on the left, IDOK "OK" (default) on the right.
+    DlgButton { x: 8px; y: 296px; width: 75px; height: 23px; text: "Print Queue"; clicked => { root.print-queue(); } }
+    DlgButton { x: 396px; y: 296px; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
 }
