@@ -24,7 +24,13 @@ const fn c(ppd: &'static str, label: &'static str, borderless: bool) -> Choice {
 }
 
 /// Main > Quality Option radios 1941-1945 = PPD `PrintQuality`.
-pub const QUALITY: [&str; 5] = ["Draft", "Text", "TextImage", "Photo", "BestPhoto"];
+pub const QUALITY: &[Choice] = &[
+    c("Draft", "Draft", false),
+    c("Text", "Text", false),
+    c("TextImage", "Text & Image", false),
+    c("Photo", "Photo", false),
+    c("BestPhoto", "Best Photo", false),
+];
 
 /// Source combo 1962 = `InputSlot` (labels: strings 1530, 1574).
 pub const SOURCES: &[Choice] = &[c("Sheet", "Sheet", true), c("CD_DVD", "CD/DVD", false)];
@@ -72,7 +78,7 @@ pub const SIZES: &[Choice] = &[
 
 /// Page Layout > By Output Paper Size = `OutputPaper`: the printable sizes.
 pub fn output_sizes() -> &'static [Choice] {
-    &SIZES[..16]
+    &SIZES[..FIRST_DOCUMENT_SIZE]
 }
 
 /// Paper Type entries listed for CD/DVD (SETTINGS-visibility.md §2.2: the
@@ -294,7 +300,7 @@ impl Values {
         let mut v = Values::default();
         let get = |k: &str| ppd.get(k).map(String::as_str);
         let pick = |list: &[Choice], k: &str, d: usize| get(k).and_then(|x| index_of(list, x)).unwrap_or(d);
-        v.quality = get("PrintQuality").and_then(|x| QUALITY.iter().position(|q| *q == x)).unwrap_or(v.quality);
+        v.quality = pick(QUALITY, "PrintQuality", v.quality);
         v.source = pick(SOURCES, "InputSlot", v.source);
         v.media = pick(MEDIA, "MediaType", v.media);
         v.size = pick(SIZES, "PageSize", v.size);
@@ -335,51 +341,48 @@ impl Values {
         v
     }
 
-    /// Every option this window controls, as `key=value` pairs.
+    /// Every option this window controls, as `key=value` pairs, after the
+    /// constraints.
     pub fn to_options(&self) -> Vec<(String, String)> {
-        let v = self.constrained();
-        v.options()
-    }
-
-    fn options(&self) -> Vec<(String, String)> {
+        let s = &self.constrained();
         let o: Vec<(&str, String)> = vec![
-            ("PrintQuality", QUALITY[self.quality].into()),
-            ("InputSlot", SOURCES[self.source].ppd.into()),
-            ("MediaType", MEDIA[self.media].ppd.into()),
-            ("PageSize", SIZES[self.size].ppd.into()),
-            ("Borderless", if self.borderless { "On" } else { "Off" }.into()),
-            ("Color", if self.grayscale { "Grayscale" } else { "Color" }.into()),
-            ("CorrectionColor", COLOR_MODES[self.color_mode].ppd.into()),
-            ("GammaValue", GAMMAS[self.gamma].ppd.into()),
+            ("PrintQuality", QUALITY[s.quality].ppd.into()),
+            ("InputSlot", SOURCES[s.source].ppd.into()),
+            ("MediaType", MEDIA[s.media].ppd.into()),
+            ("PageSize", SIZES[s.size].ppd.into()),
+            ("Borderless", if s.borderless { "On" } else { "Off" }.into()),
+            ("Color", if s.grayscale { "Grayscale" } else { "Color" }.into()),
+            ("CorrectionColor", COLOR_MODES[s.color_mode].ppd.into()),
+            ("GammaValue", GAMMAS[s.gamma].ppd.into()),
             (
                 "ReduceEnlarge",
-                match (self.reduce, self.by_percent) {
+                match (s.reduce, s.by_percent) {
                     (false, _) => "Off",
                     (true, false) => "ByOutputPaperSize",
                     (true, true) => "ByPercentage",
                 }
                 .into(),
             ),
-            ("OutputPaper", output_sizes()[self.output_size].ppd.into()),
-            ("ScaleRatio", self.scale.to_string()),
-            ("PosterPrinting", if self.multi_page && self.poster { POSTERS[self.poster_index].0 } else { "Off" }.into()),
-            ("Rotate180", if self.rotate180 { "On" } else { "Off" }.into()),
-            ("MirrorImage", if self.mirror { "On" } else { "Off" }.into()),
-            ("BrightnessValue", self.brightness.to_string()),
-            ("ContrastValue", self.contrast.to_string()),
-            ("SaturationValue", self.saturation.to_string()),
-            ("CyanValue", self.cyan.to_string()),
-            ("MagentaValue", self.magenta.to_string()),
-            ("YellowValue", self.yellow.to_string()),
-            ("orientation-requested", if self.landscape { "4" } else { "3" }.into()),
-            ("outputorder", if self.reverse { "reverse" } else { "normal" }.into()),
+            ("OutputPaper", output_sizes()[s.output_size].ppd.into()),
+            ("ScaleRatio", s.scale.to_string()),
+            ("PosterPrinting", if s.multi_page && s.poster { POSTERS[s.poster_index].0 } else { "Off" }.into()),
+            ("Rotate180", if s.rotate180 { "On" } else { "Off" }.into()),
+            ("MirrorImage", if s.mirror { "On" } else { "Off" }.into()),
+            ("BrightnessValue", s.brightness.to_string()),
+            ("ContrastValue", s.contrast.to_string()),
+            ("SaturationValue", s.saturation.to_string()),
+            ("CyanValue", s.cyan.to_string()),
+            ("MagentaValue", s.magenta.to_string()),
+            ("YellowValue", s.yellow.to_string()),
+            ("orientation-requested", if s.landscape { "4" } else { "3" }.into()),
+            ("outputorder", if s.reverse { "reverse" } else { "normal" }.into()),
             (
                 "number-up",
-                if self.multi_page && !self.poster { PAGES_PER_SHEET[self.pages_index] } else { 1 }.to_string(),
+                if s.multi_page && !s.poster { PAGES_PER_SHEET[s.pages_index] } else { 1 }.to_string(),
             ),
-            ("page-border", if self.multi_page && !self.poster && self.page_borders { "single" } else { "none" }.into()),
-            ("copies", self.copies.to_string()),
-            ("collate", self.collate.to_string()),
+            ("page-border", if s.multi_page && !s.poster && s.page_borders { "single" } else { "none" }.into()),
+            ("copies", s.copies.to_string()),
+            ("collate", s.collate.to_string()),
         ];
         o.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
     }

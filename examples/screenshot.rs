@@ -30,6 +30,7 @@ fn fill_lists(p: &Prefs) {
     let flags = |list: &[settings::Choice]| -> slint::ModelRc<bool> {
         slint::VecModel::from_slice(&list.iter().map(|c| c.borderless).collect::<Vec<_>>())
     };
+    p.set_quality_labels(labels(settings::QUALITY));
     p.set_source_labels(labels(settings::SOURCES));
     p.set_media_labels(labels(settings::MEDIA));
     p.set_size_labels(labels(settings::SIZES));
@@ -222,10 +223,6 @@ fn main() {
     let d = StatusMonitorDialog::new().unwrap();
     d.set_title_text("Ink low".into());
     d.set_body("Light Cyan: You can keep printing. Refill the ink tank soon. The ink levels shown are estimates and can differ from the real levels. To be sure, look at the ink tanks on the printer.".into());
-    let inks: Vec<InkLevel> = [("Cyan", 0x00a0e0, 47), ("Magenta", 0xd0168c, 37), ("Light Magenta", 0xf08cc8, 18), ("Light Cyan", 0x7fd0f0, 3), ("Black", 0x202020, 81), ("Yellow", 0xf0c800, 27)]
-        .iter()
-        .map(|&(n, c, l)| InkLevel { name: n.into(), color: slint::Color::from_argb_encoded(0xff00_0000 | c), level: l })
-        .collect();
     d.set_inks(slint::VecModel::from_slice(&inks));
     render(&p, "status-monitor", (479, 412), || d.show(), &out);
 }

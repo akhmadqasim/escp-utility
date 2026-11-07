@@ -199,7 +199,13 @@ impl App {
     /// Windows runs the utility dialogs modally: while one is open, the
     /// property sheet ignores clicks.
     fn refresh_busy(&self) {
-        let open = [
+        self.main.set_busy(self.modal_windows().iter().any(|w| w.is_visible()));
+    }
+
+    /// Every dialog that blocks the property sheet while it is open (the
+    /// Current Settings window is modeless).
+    fn modal_windows(&self) -> [&slint::Window; 14] {
+        [
             self.wait.window(),
             self.nozzle.window(),
             self.nozzle_result.window(),
@@ -215,9 +221,12 @@ impl App {
             self.color_controls.window(),
             self.layout_dialog.window(),
         ]
-        .iter()
-        .any(|w| w.is_visible());
-        self.main.set_busy(open);
+    }
+
+    /// Show or hide the Current Settings window (dialog 4050).
+    fn show_settings(&self, on: bool) {
+        let _ = if on { self.current_settings.show() } else { self.current_settings.hide() };
+        self.main.global::<Prefs>().set_settings_shown(on);
     }
 
     // Printing Preferences (settings.rs): the four settings pages edit the
@@ -226,9 +235,7 @@ impl App {
     fn set_prefs(&self, v: &Values) {
         let p = self.main.global::<Prefs>();
         // The source-dependent lists and the selected row in each.
-        let labels = |rows: &[usize], table: &[settings::Choice]| -> slint::ModelRc<slint::SharedString> {
-            slint::VecModel::from_slice(&rows.iter().map(|&i| slint::SharedString::from(table[i].label)).collect::<Vec<_>>())
-        };
+        let labels = |rows: &[usize], table: &[settings::Choice]| strings(rows.iter().map(|&i| table[i].label));
         let pos = |rows: &[usize], i: usize| rows.iter().position(|&r| r == i).unwrap_or(0) as i32;
         let (media, sizes, outputs) = (v.media_list(), v.size_list(), v.output_list());
         p.set_media_labels(labels(&media, settings::MEDIA));
@@ -238,9 +245,7 @@ impl App {
         p.set_output_labels(labels(&outputs, settings::output_sizes()));
         p.set_output_pos(pos(&outputs, v.output_size));
         let qualities = settings::advanced_qualities(v.media);
-        p.set_adv_quality_labels(slint::VecModel::from_slice(
-            &qualities.iter().map(|(l, _)| slint::SharedString::from(*l)).collect::<Vec<_>>(),
-        ));
+        p.set_adv_quality_labels(strings(qualities.iter().map(|q| q.0)));
         p.set_adv_quality_pos(settings::advanced_quality_pos(v.media, v.quality) as i32);
         p.set_quality(v.quality as i32);
         p.set_source(v.source as i32);
@@ -373,7 +378,7 @@ impl App {
         let lines = [
             ("Paper Source", SOURCES[v.source].label.to_string()),
             ("Paper Type", MEDIA[v.media].label.to_string()),
-            ("Quality", ["Draft", "Text", "Text & Image", "Photo", "Best Photo"][v.quality].to_string()),
+            ("Quality", QUALITY[v.quality].label.to_string()),
             ("Document Size", SIZES[v.size].label.to_string()),
             ("Borderless", on_off(v.borderless)),
             ("Orientation", if v.landscape { "Landscape" } else { "Portrait" }.to_string()),
@@ -789,19 +794,22 @@ fn ink_color(code: u8) -> slint::Color {
     slint::Color::from_argb_encoded(0xff00_0000 | rgb)
 }
 
+/// A Slint string list.
+fn strings<'a>(items: impl IntoIterator<Item = &'a str>) -> slint::ModelRc<slint::SharedString> {
+    slint::VecModel::from_slice(&items.into_iter().map(slint::SharedString::from).collect::<Vec<_>>())
+}
+
 /// The Windows labels of each list (settings.rs tables).
 fn fill_lists(p: &Prefs) {
-    let model = |labels: Vec<&str>| -> slint::ModelRc<slint::SharedString> {
-        slint::VecModel::from_slice(&labels.into_iter().map(slint::SharedString::from).collect::<Vec<_>>())
-    };
     let flags = |list: &[settings::Choice]| -> slint::ModelRc<bool> {
         slint::VecModel::from_slice(&list.iter().map(|c| c.borderless).collect::<Vec<_>>())
     };
-    let labels = |list: &[settings::Choice]| model(list.iter().map(|c| c.label).collect());
+    let labels = |list: &[settings::Choice]| strings(list.iter().map(|c| c.label));
+    p.set_quality_labels(labels(settings::QUALITY));
     p.set_source_labels(labels(settings::SOURCES));
     p.set_color_mode_labels(labels(settings::COLOR_MODES));
     p.set_gamma_labels(labels(settings::GAMMAS));
-    p.set_preset_labels(model(settings::PRESETS.iter().map(|x| x.name).collect()));
+    p.set_preset_labels(strings(settings::PRESETS.iter().map(|x| x.name)));
     p.set_source_borderless(flags(settings::SOURCES));
     p.set_media_borderless(flags(settings::MEDIA));
     p.set_size_borderless(flags(settings::SIZES));
@@ -958,7 +966,6 @@ fn wire(ui: &App) {
         slint::CloseRequestResponse::HideWindow
     });
     let prefs = ui.main.global::<Prefs>();
-    // Show Settings / Hide Settings toggles the Current Settings window.
     // After every edit: re-apply the constraints and refill the lists.
     prefs.on_edited(on(|a| a.set_prefs(&a.prefs())));
     prefs.on_pick(|list, row| {
@@ -973,11 +980,6 @@ fn wire(ui: &App) {
             _ => return,
         }
         let p = a.main.global::<Prefs>();
-        // Same rules as any other edit (Prefs.changed): Reduce/Enlarge for
-        // document sizes, then constraints and lists.
-        if v.size >= settings::FIRST_DOCUMENT_SIZE {
-            v.reduce = true;
-        }
         a.set_prefs(&v.constrained());
         p.set_dirty(true);
         p.set_preset(-1);
@@ -990,18 +992,12 @@ fn wire(ui: &App) {
     ui.color_controls.on_ok(on(|a| a.color_controls_ok()));
     ui.color_controls.on_cancel(on(|a| a.close(&a.color_controls)));
     ui.layout_dialog.on_dismiss(on(|a| a.close(&a.layout_dialog)));
-    prefs.on_toggle_settings(on(|a| {
-        let shown = a.current_settings.window().is_visible();
-        let _ = if shown { a.current_settings.hide() } else { a.current_settings.show() };
-        a.main.global::<Prefs>().set_settings_shown(!shown);
-    }));
-    ui.current_settings.on_dismiss(on(|a| {
-        let _ = a.current_settings.hide();
-        a.main.global::<Prefs>().set_settings_shown(false);
-    }));
+    // Show Settings / Hide Settings toggles the Current Settings window.
+    prefs.on_toggle_settings(on(|a| a.show_settings(!a.current_settings.window().is_visible())));
+    ui.current_settings.on_dismiss(on(|a| a.show_settings(false)));
     ui.current_settings.window().on_close_requested(|| {
         if let Some(a) = app() {
-            a.main.global::<Prefs>().set_settings_shown(false);
+            a.show_settings(false);
         }
         slint::CloseRequestResponse::HideWindow
     });
@@ -1019,19 +1015,8 @@ fn wire(ui: &App) {
         p.set_preset(i);
     });
     // A dialog closed with its close box: the sheet takes clicks again.
-    for w in [
-        ui.nozzle.window(),
-        ui.nozzle_result.window(),
-        ui.cleaning.window(),
-        ui.power.window(),
-        ui.cleaning_done.window(),
-        ui.paper_guide.window(),
-        ui.message.window(),
-        ui.info.window(),
-        ui.dump.window(),
-        ui.color_controls.window(),
-        ui.layout_dialog.window(),
-    ] {
+    // (201, 223 and Status Monitor 3 get their own handlers below.)
+    for w in ui.modal_windows() {
         w.on_close_requested(|| {
             Timer::single_shot(Duration::ZERO, on(|a| a.refresh_busy()));
             slint::CloseRequestResponse::HideWindow

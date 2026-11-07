@@ -9,6 +9,10 @@ export global Strings {
     out property <string> windows-only: "Windows-only: this belongs to the Windows driver or print spooler.";
     out property <string> alignment-off: "Not available on Linux yet: Print Head Alignment writes permanent calibration values to the printer, so it stays off until a test run is approved.";
     out property <string> speed-off: "Not available on Linux: Speed & Progress holds Windows print-spooler settings only.";
+    out property <string> borderless-off: "Borderless is not available for this paper source, type or size.";
+    out property <string> quiet-off: "No Linux option: the L800 CUPS driver has no quiet mode.";
+    out property <string> gamma-vivid: "Gamma 1.8 cannot be used with EPSON Vivid.";
+    out property <string> no-help: "No help file on Linux.";
 }
 
 export component DlgText inherits Text {
@@ -77,38 +81,6 @@ export component IconButton inherits Rectangle {
         }
     }
     if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
-}
-
-export component RadioButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> checked;
-    callback picked;
-    Rectangle {
-        x: 0;
-        y: (parent.height - self.height) / 2;
-        width: 13px;
-        height: 13px;
-        border-radius: 6.5px;
-        border-width: 1px;
-        border-color: #333333;
-        background: #ffffff;
-        Rectangle {
-            width: 7px;
-            height: 7px;
-            border-radius: 3.5px;
-            background: Palette.accent-background;
-            visible: root.checked;
-        }
-    }
-    DlgText {
-        x: 17px;
-        width: parent.width - 17px;
-        height: parent.height;
-        vertical-alignment: center;
-        text: root.text;
-        wrap: no-wrap;
-    }
-    TouchArea { clicked => { root.picked(); } }
 }
 
 // Control 516: 33 x 36 box, 32 x 32 icon drawn at (0,0), not centred.

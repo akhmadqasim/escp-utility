@@ -16,7 +16,7 @@
 
 import { Button, ComboBox, Palette, TextEdit } from "std-widgets.slint";
 
-import { Strings, DlgText, EtchedLine, DlgButton, IconButton, RadioButton, DlgIcon, UtilityWindow, InkLevel, InkMeter, CheckBox } from "common.slint";
+import { Strings, DlgText, EtchedLine, DlgButton, IconButton, Radio, DlgIcon, UtilityWindow, InkLevel, InkMeter, CheckBox } from "common.slint";
 import { Prefs, ShortcutsPage, MainPage, AdvancedPage, PageLayoutPage } from "pages.slint";
 import { ColorControlsDialog, LayoutDialog, LayoutKind, LayoutControl } from "dialogs.slint";
 export { InkLevel, Prefs, ColorControlsDialog, LayoutDialog, LayoutKind, LayoutControl }
@@ -253,7 +253,7 @@ export component MainWindow inherits Window {
     DlgButton { x: root.width - 6px - 3 * 75px - 2 * 6px; y: root.btn-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
     DlgButton { x: root.width - 6px - 2 * 75px - 6px; y: root.btn-y; width: 75px; height: 23px; text: "Apply"; enabled: Prefs.dirty; clicked => { root.apply(); } }
     // Windows shows Help when the driver's help file is present (PSP_HASHELP).
-    DlgButton { x: root.width - 6px - 75px; y: root.btn-y; width: 75px; height: 23px; text: "Help"; enabled: false; tip: "No help file on Linux."; }
+    DlgButton { x: root.width - 6px - 75px; y: root.btn-y; width: 75px; height: 23px; text: "Help"; enabled: false; tip: Strings.no-help; }
 
     // Swallow clicks while a utility dialog is open.
     if root.busy: TouchArea { width: 100%; height: 100%; }
@@ -369,13 +369,13 @@ export component HeadCleaningDialog inherits UtilityWindow {
     cancel-action => { root.cancel(); }
     DlgIcon { x: 6px; y: 179px; source: @image-url("icons/head-cleaning.svg"); }
     DlgText { x: 45px; y: 11px; width: 339px; height: 169px; text: root.body; }
-    RadioButton {
+    Radio {
         x: 60px; y: 202px; width: 348px; height: 29px;
         text: "Cleaning";
         checked: !root.power;
         picked => { root.power = false; }
     }
-    RadioButton {
+    Radio {
         x: 60px; y: 263px; width: 348px; height: 29px;
         text: "Power Cleaning";
         checked: root.power;
