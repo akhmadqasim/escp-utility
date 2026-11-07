@@ -239,6 +239,67 @@ mod tests {
         assert_eq!(ti_of(&want), Timestamp { year: 2025, month: 1, day: 2, hour: 3, minute: 4, second: 5 });
     }
 
+    fn golden_files() -> Vec<std::path::PathBuf> {
+        let mut v = vec![];
+        for model in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden")).unwrap().flatten() {
+            v.extend(std::fs::read_dir(model.path()).unwrap().flatten().map(|f| f.path()));
+        }
+        v
+    }
+
+    /// Each golden is `.hex`, has a `#` header naming its byte count, and
+    /// every data line is at most 16 two-digit hex tokens.
+    #[test]
+    fn goldens_are_well_formed_hex() {
+        for path in golden_files() {
+            let name = path.display().to_string();
+            assert_eq!(path.extension().and_then(|e| e.to_str()), Some("hex"), "{name}");
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.starts_with('#'), "{name}: no header");
+            for l in text.lines().filter(|l| !l.starts_with('#')) {
+                let toks: Vec<&str> = l.split_whitespace().collect();
+                assert!(!toks.is_empty() && toks.len() <= 16, "{name}: {l:?}");
+                assert!(toks.iter().all(|t| t.len() == 2 && t.chars().all(|c| c.is_ascii_hexdigit())), "{name}: {l:?}");
+            }
+            let n = golden(&path).len();
+            assert!(text.lines().next().unwrap().contains(&format!("{n} bytes")), "{name}: header lacks {n} bytes");
+        }
+    }
+
+    /// Every cleaning of a profile with a golden directory has a golden.
+    #[test]
+    fn every_profiled_cleaning_has_a_golden() {
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden"));
+        for p in crate::profile::builtin() {
+            let d = dir.join(&p.mdl);
+            if !d.is_dir() {
+                continue;
+            }
+            assert!(d.join("nozzle-check.hex").is_file(), "{}: nozzle-check", p.mdl);
+            for c in &p.cleaning {
+                assert!(d.join(format!("head-cleaning-{:02x}.hex", c.ch)).is_file(), "{}: ch {:02x}", p.mdl, c.ch);
+            }
+        }
+    }
+
+    /// A `--profile` file is searched before the built-ins (as in main), and
+    /// its cleaning ch lands in byte 5 of `CH`; nothing else changes.
+    #[test]
+    fn profile_file_custom_ch() {
+        let file = "[[printer]]\nmdl = \"L800\"\ntested = \"\"\nwindows_family = \"G5P\"\nnc_param = 0x00\n\
+                    cleaning = [ { label = \"Cleaning\", ch = 0x00 }, { label = \"Deep\", ch = 0x20 } ]\n";
+        let mut profiles = crate::profile::parse(file).unwrap();
+        profiles.extend(crate::profile::builtin());
+        let p = crate::profile::find(&profiles, Some("L800")).unwrap();
+        assert!(p.cleaning.iter().any(|c| c.ch == 0x20 && c.label == "Deep"));
+        let base = golden(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/L800/head-cleaning-00.hex")));
+        let got = head_cleaning_job(0x20, ti_of(&base));
+        let i = base.windows(5).position(|w| w == b"CH\x02\x00\x00").unwrap() + 5;
+        let mut want = base.clone();
+        want[i] = 0x20;
+        assert_eq!(got, want);
+    }
+
     #[test]
     fn exit_packet_mode_matches_string_4300() {
         let s4300 = hex("1B 00 00 00 1B 01 40 45 4A 4C 20 31 32 38 34 2E 34 0A 40 45 4A 4C 20 20 20 20 20 0A");
@@ -270,5 +331,101 @@ mod tests {
     fn hexdump_format() {
         let d = hexdump(b"NC\x02\x00\x00\x00");
         assert_eq!(d, "00000000  4e 43 02 00 00 00                                 |NC....|\n");
+    }
+
+    #[test]
+    fn ti_leap_day_2099_and_midnight() {
+        let leap = Timestamp { year: 2028, month: 2, day: 29, hour: 23, minute: 59, second: 59 };
+        assert_eq!(leap.ti_command().to_vec(), hex("54 49 08 00 00 07 ec 02 1d 17 3b 3b"));
+        let y2099 = Timestamp { year: 2099, month: 12, day: 31, hour: 0, minute: 0, second: 0 };
+        assert_eq!(y2099.ti_command().to_vec(), hex("54 49 08 00 00 08 33 0c 1f 00 00 00"));
+        let midnight = Timestamp { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+        assert_eq!(&midnight.ti_command()[7..], &[1, 1, 0, 0, 0]);
+    }
+
+    /// TI sits right after the first ENTER_REMOTE, at bytes 44..56 in both jobs.
+    #[test]
+    fn ti_position_in_jobs() {
+        for job in [nozzle_check_job(0, TS), head_cleaning_job(0, TS)] {
+            assert_eq!(&job[..44], [EXIT_PACKET_MODE, RESET_TWICE, ENTER_REMOTE].concat().as_slice());
+            assert_eq!(job[44..56], TS.ti_command());
+            assert_eq!(ti_of(&job), TS);
+        }
+    }
+
+    /// Every built-in profile: NC/CH carry the parameter in byte 5 only, the
+    /// lengths stay 132/92, and every job ends with the JE trailer.
+    #[test]
+    fn every_profile_param_lands_in_byte_5() {
+        let profiles = crate::profile::builtin();
+        assert!(!profiles.is_empty());
+        for p in &profiles {
+            let nc = nozzle_check_job(p.nc_param, TS);
+            assert_eq!(nc.len(), 132, "{}", p.mdl);
+            let at = nc.windows(5).position(|w| w == b"NC\x02\x00\x00").expect("NC");
+            assert_eq!(at, 64, "{}", p.mdl);
+            assert_eq!(nc[at + 5], p.nc_param, "{}", p.mdl);
+            assert!(nc.ends_with(JOB_END_TRAILER), "{}", p.mdl);
+            for c in &p.cleaning {
+                let ch = head_cleaning_job(c.ch, TS);
+                assert_eq!(ch.len(), 92, "{} {}", p.mdl, c.label);
+                assert_eq!(&ch[56..61], b"CH\x02\x00\x00");
+                assert_eq!(ch[61], c.ch, "{} {}", p.mdl, c.label);
+                assert_eq!(&ch[62..66], EXIT_REMOTE);
+                assert!(ch.ends_with(JOB_END_TRAILER), "{} {}", p.mdl, c.label);
+            }
+        }
+    }
+
+    /// Only byte 5 of NC/CH depends on the parameter, for all 256 values.
+    #[test]
+    fn param_changes_only_one_byte() {
+        let nc0 = nozzle_check_job(0, TS);
+        let ch0 = head_cleaning_job(0, TS);
+        for v in 1..=255u8 {
+            let nc = nozzle_check_job(v, TS);
+            let d: Vec<usize> = (0..nc.len()).filter(|&i| nc[i] != nc0[i]).collect();
+            assert_eq!(d, vec![69]);
+            let ch = head_cleaning_job(v, TS);
+            let d: Vec<usize> = (0..ch.len()).filter(|&i| ch[i] != ch0[i]).collect();
+            assert_eq!(d, vec![61]);
+        }
+    }
+
+    /// Remote-mode framing: every ENTER_REMOTE is closed by an EXIT_REMOTE
+    /// before the next one, and the job ends outside remote mode.
+    #[test]
+    fn remote_mode_enter_exit_balanced() {
+        for (job, want) in [(nozzle_check_job(0, TS), 3), (head_cleaning_job(0x10, TS), 2)] {
+            let enters: Vec<usize> = job.windows(ENTER_REMOTE.len()).enumerate().filter(|(_, w)| *w == ENTER_REMOTE).map(|(i, _)| i).collect();
+            let exits: Vec<usize> = job.windows(EXIT_REMOTE.len()).enumerate().filter(|(_, w)| *w == EXIT_REMOTE).map(|(i, _)| i).collect();
+            // EXIT_PACKET_MODE starts with 00 00 00 1B, not ESC 00 00 00, so it is not counted.
+            assert_eq!(enters.len(), want);
+            assert_eq!(exits.len(), want);
+            for (k, e) in enters.iter().enumerate() {
+                assert!(exits[k] > *e);
+                if let Some(next) = enters.get(k + 1) {
+                    assert!(exits[k] < *next);
+                }
+            }
+            assert_eq!(*exits.last().unwrap(), job.len() - EXIT_REMOTE.len());
+        }
+    }
+
+    /// JE trailer: reset, enter remote, `JE 01 00 00`, exit remote, 26 bytes.
+    #[test]
+    fn je_trailer_structure() {
+        assert_eq!(JOB_END_TRAILER.len(), 26);
+        assert_eq!(JOB_END_TRAILER, [RESET_TWICE, ENTER_REMOTE, b"JE\x01\x00\x00", EXIT_REMOTE].concat().as_slice());
+    }
+
+    /// Each remote command's 2-byte little-endian length matches its payload.
+    #[test]
+    fn remote_command_lengths() {
+        for cmd in [&ENTER_REMOTE[2..], JOB_START, VI, LD, &NOZZLE_CHECK[..], &HEAD_CLEANING[..], &TS.ti_command()[..]] {
+            let (len_at, body) = if cmd[0] == b'R' { (1, 3) } else { (2, 4) };
+            let n = u16::from_le_bytes([cmd[len_at], cmd[len_at + 1]]) as usize;
+            assert_eq!(cmd.len() - body, n, "{:?}", String::from_utf8_lossy(cmd));
+        }
     }
 }

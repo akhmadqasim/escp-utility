@@ -505,6 +505,175 @@ mod tests {
         assert!(text.starts_with("Light Cyan: "), "{text}");
     }
 
+    fn ink(level: u8) -> Ink {
+        Ink { ink_id: 0, color: 0, raw_level: level }
+    }
+
+    fn with(st_byte: Option<u8>, er: Option<u8>, wr: &[u8], levels: &[u8]) -> Status {
+        Status { st: st_byte, er, warnings: wr.to_vec(), inks: levels.iter().map(|&l| ink(l)).collect(), ..Default::default() }
+    }
+
+    #[test]
+    fn generic_precheck_table() {
+        use Precheck::*;
+        // (ST, ER, WR, ink levels, cleaning, expected)
+        type Case = (Option<u8>, Option<u8>, &'static [u8], &'static [u8], bool, Precheck);
+        let cases: &[Case] = &[
+            // ST 00 and ST 01 stop both buttons.
+            (Some(0x00), None, &[], &[50], false, Problem),
+            (Some(0x00), None, &[], &[50], true, Problem),
+            (Some(0x01), None, &[], &[50], true, CannotComplete),
+            // ST 01 wins over an ER field.
+            (Some(0x01), Some(0x04), &[], &[50], false, CannotComplete),
+            // Unknown ST or any ER blocks.
+            (Some(0x05), None, &[], &[50], false, Problem),
+            (Some(0xFF), None, &[], &[50], true, Problem),
+            (Some(0x07), Some(0x00), &[], &[50], true, Problem),
+            (None, Some(0x10), &[], &[50], false, Problem),
+            // Known non-error STs proceed.
+            (Some(0x02), None, &[], &[50], false, Proceed),
+            (Some(0x03), None, &[], &[50], true, Proceed),
+            (Some(0x08), None, &[], &[50], true, Proceed),
+            (Some(0x0A), None, &[], &[50], false, Proceed),
+            (Some(0x0D), None, &[], &[50], true, Proceed),
+            // Ink 0 stops both, ahead of the cleaning rules and ST 07.
+            (Some(0x04), None, &[], &[50, 0], false, InkOut),
+            (Some(0x07), None, &[0x51], &[0, 3], true, InkOut),
+            // Ink 1-4 % stops cleaning only; 5 % and special codes do not.
+            (Some(0x04), None, &[], &[1], true, CleaningBlocked),
+            (Some(0x04), None, &[], &[4], true, CleaningBlocked),
+            (Some(0x04), None, &[], &[4], false, Proceed),
+            (Some(0x04), None, &[], &[5], true, Proceed),
+            (Some(0x04), None, &[], &[0x6E, 0xFF], true, Proceed),
+            // WR 0x51-0x5A stops cleaning; the neighbours do not.
+            (Some(0x04), None, &[0x51], &[50], true, CleaningBlocked),
+            (Some(0x04), None, &[0x5A], &[50], true, CleaningBlocked),
+            (Some(0x04), None, &[0x50], &[50], true, Proceed),
+            (Some(0x04), None, &[0x5B], &[50], true, Proceed),
+            (Some(0x04), None, &[0x5A], &[50], false, Proceed),
+            // Cleaning blocked outranks "Now cleaning!".
+            (Some(0x07), None, &[0x55], &[50], true, CleaningBlocked),
+            (Some(0x07), None, &[], &[2], true, CleaningBlocked),
+            (Some(0x07), None, &[], &[50], true, NowCleaning),
+            (Some(0x07), None, &[], &[50], false, Proceed),
+        ];
+        for (i, &(st_b, er, wr, lv, cl, want)) in cases.iter().enumerate() {
+            assert_eq!(precheck_generic(&with(st_b, er, wr, lv), cl), want, "case {i}");
+        }
+    }
+
+    #[test]
+    fn l800_precheck_table() {
+        use Precheck::*;
+        // (ST, TP, WR, ink levels, cleaning, expected)
+        type Case = (Option<u8>, bool, &'static [u8], &'static [u8], bool, Precheck);
+        let cases: &[Case] = &[
+            // ST 00 / 11 are a problem even with TP or cleaning warnings.
+            (Some(0x00), true, &[0x51], &[50], true, Problem),
+            (Some(0x11), false, &[], &[50], false, Problem),
+            (Some(0x01), true, &[], &[50], true, CannotComplete),
+            // TP outranks the cleaning warning.
+            (Some(0x04), true, &[0x51], &[50], true, CannotComplete),
+            (Some(0x07), true, &[], &[50], true, CannotComplete),
+            // Only 0x51/0x52 block cleaning on the L800 table.
+            (Some(0x04), false, &[0x51], &[50], true, CleaningBlocked),
+            (Some(0x04), false, &[0x53], &[50], true, Proceed),
+            (Some(0x04), false, &[0x56], &[50], true, Proceed),
+            (Some(0x07), false, &[0x52], &[50], true, CleaningBlocked),
+            // Ink levels are not checked there.
+            (Some(0x04), false, &[], &[0, 2], true, Proceed),
+        ];
+        for (i, &(st_b, tp, wr, lv, cl, want)) in cases.iter().enumerate() {
+            let s = Status { tp, ..with(st_b, None, wr, lv) };
+            assert_eq!(precheck(&s, cl), want, "case {i}");
+        }
+    }
+
+    #[test]
+    fn l800_error_rows_need_st_00() {
+        let rows = [
+            (Some(0x00), "General error"),
+            (Some(0x01), "Printer busy"),
+            (Some(0x04), "Paper jam or CD/DVD tray jam"),
+            (Some(0x05), "Check Ink Levels"),
+            (Some(0x06), "Paper out or not loaded correctly"),
+            (Some(0x10), "Service required"),
+            (Some(0x12), "Page not printed or multi-page error"),
+            (Some(0x29), "CD/DVD tray not set correctly"),
+            (Some(0x37), "Printer cover open"),
+            (Some(0x38), "Front tray position error"),
+            (Some(0x99), "Unknown error"),
+            (None, "Communication error"),
+        ];
+        for (er, title) in rows {
+            // Error rows win over any warning when ST=00.
+            assert_eq!(message(&with(Some(0x00), er, &[0x71], &[50])).0, title, "ER {er:?}");
+            // With any other ST the ER field is ignored.
+            assert_eq!(message(&with(Some(0x04), er, &[], &[50])).0, "Ready", "ER {er:?}");
+        }
+    }
+
+    #[test]
+    fn l800_message_priority() {
+        let cases: &[(u8, &[u8], &str)] = &[
+            // ST 08 / 0A come before the warning rows.
+            (0x08, &[0x71], "Initial setup error"),
+            (0x0A, &[0x10], "Printer is shutting down"),
+            // Warning rank: 7x, then 2x, 4x, 3x, 1x.
+            (0x04, &[0x10, 0x20], "Service required"),
+            (0x04, &[0x20, 0x75], "Ink low"),
+            (0x04, &[0x15], "Ink low"),
+            (0x04, &[0x16], "Ready"),
+            // 0x4x / 0x3x outrank 0x1x and have no row: "Ink low" is hidden.
+            (0x04, &[0x13, 0x40], "Ready"),
+            (0x04, &[0x31, 0x11], "Ready"),
+            (0x07, &[0x41, 0x10], "Printer busy"),
+            // ...but not 0x7x.
+            (0x04, &[0x41, 0x72], "Ink low"),
+            // Fallback to the first warning when no ranked nibble matches.
+            (0x02, &[0x51], "Printing"),
+            // ST rows.
+            (0x03, &[], "Printing"),
+            (0x07, &[], "Printer busy"),
+            (0x11, &[], "Ink charging in progress"),
+            (0x01, &[], "Communication error"),
+            (0x0D, &[], "Communication error"),
+        ];
+        for &(st_b, wr, title) in cases {
+            assert_eq!(message(&with(Some(st_b), None, wr, &[50; 6])).0, title, "ST {st_b:02X} WR {wr:02X?}");
+        }
+        assert_eq!(message(&Status::default()).0, "Communication error");
+    }
+
+    #[test]
+    fn low_ink_names_follow_slot() {
+        let inks: Vec<Ink> = (0..6).map(|c| Ink { ink_id: 0, color: c, raw_level: 50 }).collect();
+        // 0x1n is slot n, 0x7n is slot n-1.
+        let s = Status { warnings: vec![0x12, 0x71], inks: inks.clone(), ..st(4) };
+        assert_eq!(low_inks(&s), "Magenta, Black: ");
+        // A slot past field 0x0F, or 0x70, gives no name.
+        let s = Status { warnings: vec![0x19, 0x70], inks, ..st(4) };
+        assert_eq!(low_inks(&s), "");
+        let (title, text) = message(&with(Some(4), None, &[0x14], &[]));
+        assert_eq!(title, "Ink low");
+        assert!(text.starts_with("You can keep printing"), "{text}");
+    }
+
+    #[test]
+    fn generic_message_priority() {
+        // Errors and ST 08/0A come before "Ink low"; other STs after it.
+        assert_eq!(message_generic(&with(Some(0x00), Some(0x04), &[0x71], &[50])).0, "Printer error (code 04)");
+        assert_eq!(message_generic(&with(Some(0x08), None, &[0x71], &[50])).0, "Initial setup");
+        assert_eq!(message_generic(&with(Some(0x07), None, &[0x1A], &[50])).0, "Ink low");
+        assert_eq!(message_generic(&with(Some(0x04), None, &[0x7A], &[50])).0, "Ink low");
+        // Unlike the L800 table, a 0x4x warning does not hide "Ink low".
+        assert_eq!(message_generic(&with(Some(0x04), None, &[0x41, 0x10], &[50])).0, "Ink low");
+        assert_eq!(message_generic(&with(Some(0x04), None, &[0x1B], &[50])).0, "Ready");
+        assert_eq!(message_generic(&with(Some(0x01), None, &[], &[50])).0, "Printing");
+        assert_eq!(message_generic(&with(Some(0x0D), None, &[], &[50])).0, "Printing");
+        assert_eq!(message_generic(&with(None, None, &[], &[])).0, "Communication error");
+    }
+
     fn cleaning(secs: Option<u16>) -> Result<Status, QueryError> {
         Ok(Status { cleaning_secs: secs, ..st(0x07) })
     }

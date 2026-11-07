@@ -93,4 +93,80 @@ mod tests {
         let none = format(&p, None, None, "", Err(QueryError::Busy));
         assert!(none.contains("Profile: generic") && none.contains("the CUPS queue has jobs"), "{none}");
     }
+
+    fn l800() -> Identity {
+        Identity {
+            queue: "L800".into(),
+            uri: "usb://EPSON/L800?serial=1234567X8901234567".into(),
+            make_model: "Epson L800 Series".into(),
+            id: printer::DeviceId::parse("MFG:EPSON;CMD:ESCPL2,BDC,D4,D4PX;MDL:L800;CLS:PRINTER;DES:EPSON L800;SN:1234567X8901234567;"),
+            source: printer::Source::Usb,
+            serial: Some("1234567X8901234567".into()),
+        }
+    }
+
+    #[test]
+    fn identity_nickname_and_options_sections() {
+        let p = l800();
+        let opts = "PageSize/Media Size: *A4 Letter\nColorModel/Color Mode: *RGB Gray\n";
+        let r = format(&p, None, Some("Epson L800 Series, ESC/P-R"), opts, Err(QueryError::Busy));
+        assert!(r.starts_with(&format!("escp-utility {} report\n\nQueue: L800\n", env!("CARGO_PKG_VERSION"))), "{r}");
+        assert!(r.contains("Make and model: Epson L800 Series\n"), "{r}");
+        assert!(r.contains("IEEE 1284 device ID (from USB (kernel cache)): MFG:EPSON;"), "{r}");
+        assert!(r.contains("Epson ESC/P (CMD ESCPL2 or ESCPR): yes\nStatus channel (CMD D4): yes\n"), "{r}");
+        assert!(r.contains("PPD NickName: Epson L800 Series, ESC/P-R\n"), "{r}");
+        assert!(r.contains(&format!("$ lpoptions -p L800 -l\n{opts}")), "{r}");
+        // Serial in URI and in the device ID are both masked.
+        assert!(!r.contains("1234567X8901234567"), "{r}");
+        assert!(r.contains("SN:XXXXXXXXXXXXXXXXXX;"), "{r}");
+    }
+
+    #[test]
+    fn st2_hex_never_contains_the_serial() {
+        let p = l800();
+        let mut raw = st2::tests::live();
+        let at = raw.windows(2).position(|w| w == [st2::id::SN, 0x0A]).unwrap() + 2;
+        raw[at..at + 10].copy_from_slice(b"S3RIAL0123");
+        let serial_hex = b"S3RIAL0123".iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ");
+        let r = format(&p, None, None, "", Ok(raw));
+        assert!(r.contains("Status reply (@BDC ST2, serial number masked):\n"), "{r}");
+        assert!(!r.contains("S3RIAL"), "{r}");
+        // Neither the hex of the full serial nor of any 3-byte run of it.
+        let hex: String = r.lines().filter(|l| l.len() > 2 && l.split(' ').all(|t| t.len() == 2 && u8::from_str_radix(t, 16).is_ok())).collect::<Vec<_>>().join(" ");
+        assert!(!hex.is_empty(), "{r}");
+        assert!(!hex.contains(&serial_hex), "{hex}");
+        for w in b"S3RIAL0123".windows(3) {
+            let h = w.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ");
+            assert!(!hex.contains(&h), "serial bytes {h} leaked: {hex}");
+        }
+    }
+
+    #[test]
+    fn unavailable_ppd_and_status_give_clear_messages() {
+        let mut p = l800();
+        p.serial = None;
+        let r = format(&p, None, None, "cannot run lpoptions: not found\n", Err(QueryError::Failed("no device".into())));
+        assert!(r.contains("PPD NickName: (none)\n"), "{r}");
+        assert!(r.contains("cannot run lpoptions: not found"), "{r}");
+        assert!(r.contains("Status: no reply (no device).\n"), "{r}");
+        assert!(r.contains("Profile: generic"), "{r}");
+        assert!(!r.contains("Status reply"), "{r}");
+    }
+
+    #[test]
+    fn truncated_reply_does_not_panic() {
+        let p = l800();
+        for raw in [vec![], b"@BDC ST2\r\n".to_vec(), st2::tests::live()[..20].to_vec()] {
+            let r = format(&p, None, None, "", Ok(raw));
+            assert!(r.contains("(not a complete @BDC ST2 reply)"), "{r}");
+        }
+    }
+
+    #[test]
+    fn empty_serial_is_not_masked() {
+        let mut p = l800();
+        p.serial = Some(String::new());
+        let r = format(&p, None, None, "", Err(QueryError::Busy));
+        assert!(r.contains("Queue: L800"), "{r}");
+    }
 }

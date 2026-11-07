@@ -317,6 +317,72 @@ mod tests {
     }
 
     #[test]
+    fn lower_case_keys_and_aliases() {
+        let id = DeviceId::parse("manufacturer:EPSON;command set:ESCPL2,D4;model:L800;");
+        assert_eq!(id.mfg(), Some("EPSON"));
+        assert_eq!(id.mdl(), Some("L800"));
+        assert!(id.maintenance());
+        assert!(id.status());
+        // MFG value compared in any case.
+        assert!(DeviceId::parse("mfg:Epson;cmd:ESCPR1;").maintenance());
+    }
+
+    #[test]
+    fn whitespace_and_semicolons() {
+        let id = DeviceId::parse("  MFG : EPSON ;; CMD: ESCPL2 , BDC , D4 ;MDL:L800 Series;;;\n");
+        assert_eq!(id.raw, "MFG : EPSON ;; CMD: ESCPL2 , BDC , D4 ;MDL:L800 Series;;;");
+        assert_eq!(id.mfg(), Some("EPSON"));
+        assert_eq!(id.mdl(), Some("L800 Series"));
+        assert_eq!(id.cmd(), vec!["ESCPL2", "BDC", "D4"]);
+        assert!(id.maintenance() && id.status());
+        // No trailing semicolon at all.
+        assert_eq!(DeviceId::parse("MFG:EPSON;CMD:ESCPL2,D4").cmd(), vec!["ESCPL2", "D4"]);
+    }
+
+    #[test]
+    fn empty_and_garbage() {
+        for raw in ["", "   ", ";;;", "no colon here"] {
+            let id = DeviceId::parse(raw);
+            assert_eq!(id.mfg(), None);
+            assert_eq!(id.mdl(), None);
+            assert!(id.cmd().is_empty());
+            assert!(id.serial().is_none());
+            assert!(!id.maintenance());
+            assert!(!id.status());
+        }
+    }
+
+    #[test]
+    fn value_keeps_inner_colons_and_first_key_wins() {
+        let id = DeviceId::parse("DES:EPSON: L800;MFG:EPSON;MFG:HP;");
+        assert_eq!(id.get(&["DES"]), Some("EPSON: L800"));
+        assert_eq!(id.mfg(), Some("EPSON"));
+    }
+
+    #[test]
+    fn serial_aliases() {
+        assert_eq!(DeviceId::parse("MFG:EPSON;SN:X3Y4012345;").serial(), Some("X3Y4012345"));
+        assert_eq!(DeviceId::parse("SERN:ABC;MFG:EPSON;").serial(), Some("ABC"));
+        assert_eq!(DeviceId::parse("serialnumber: S1 ;").serial(), Some("S1"));
+        // An empty serial is no serial.
+        assert_eq!(DeviceId::parse("MFG:EPSON;SN:;").serial(), None);
+        assert_eq!(DeviceId::parse(L800_ID).serial(), None);
+    }
+
+    #[test]
+    fn status_gate_needs_exact_d4() {
+        assert!(DeviceId::parse("MFG:EPSON;CMD:D4;").status());
+        assert!(!DeviceId::parse("MFG:EPSON;CMD:ESCPL2,BDC;").status());
+        assert!(!DeviceId::parse("MFG:EPSON;CMD:ESCPL2,D4X;").status());
+        // Status does not need MFG:EPSON; maintenance does.
+        let hp = DeviceId::parse("MFG:HP;CMD:PCL,D4;");
+        assert!(hp.status());
+        assert!(!hp.maintenance());
+        // Missing MFG blocks maintenance.
+        assert!(!DeviceId::parse("CMD:ESCPL2,D4;MDL:L800;").maintenance());
+    }
+
+    #[test]
     fn lpstat_samples() {
         let text = "device for L800: usb://EPSON/L800?serial=1234567X8901234567\n\
                     device for ET2750: dnssd://EPSON%20ET-2750%20Series._ipp._tcp.local/?uuid=cfe92100-67c4-11d4-a45f-64eb8c3d5a9e\n\
@@ -377,6 +443,116 @@ mod tests {
         // CUPS takes the URI serial from the ID's SN field when it has one.
         fs::write(root.join("lp0-usbdev/iface/ieee1284_id"), "MFG:EPSON;CMD:ESCPR1,D4;MDL:X;SN:IDSERIAL1;").unwrap();
         assert_eq!(usb_match(&root, "IDSERIAL1").map(|m| m.0), Some(PathBuf::from("/dev/usb/lp0")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A fake usbmisc tree under its own name: (lpN, USB serial or None, ID).
+    fn sysfs_with(tag: &str, devs: &[(&str, Option<&str>, &str)]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("usbmisc-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        for (lp, serial, id) in devs {
+            let usbdev = root.join(format!("{lp}-usbdev"));
+            fs::create_dir_all(usbdev.join("iface")).unwrap();
+            if let Some(s) = serial {
+                fs::write(usbdev.join("serial"), s).unwrap();
+            }
+            fs::write(usbdev.join("iface/ieee1284_id"), id).unwrap();
+            fs::create_dir_all(root.join(lp)).unwrap();
+            std::os::unix::fs::symlink(usbdev.join("iface"), root.join(lp).join("device")).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn lpstat_queue_names_and_uri_forms() {
+        let text = "device for EPSON_L800-Series: usb://EPSON/L800%20Series?serial=ABC&interface=1\r\n\
+                    device for my-office_printer2: ipp://cups.local:631/printers/x\n\
+                    device for Dummy: file:///dev/null  \n\
+                    device for L805: dnssd://EPSON%20L805._pdl-datastream._tcp.local/\n";
+        let q = parse_lpstat_v(text);
+        let names: Vec<&str> = q.iter().map(|q| q.name.as_str()).collect();
+        assert_eq!(names, ["EPSON_L800-Series", "my-office_printer2", "Dummy", "L805"]);
+        // CR and trailing blanks are trimmed; the port's ':' stays in the URI.
+        assert_eq!(q[0].uri, "usb://EPSON/L800%20Series?serial=ABC&interface=1");
+        assert_eq!(q[1].uri, "ipp://cups.local:631/printers/x");
+        assert_eq!(q[2].uri, "file:///dev/null");
+        assert_eq!(uri_device_id(&q[0].uri).unwrap().mdl(), Some("L800 Series"));
+        assert!(is_epson(&q[3], ""));
+        assert!(!is_epson(&q[2], ""));
+    }
+
+    #[test]
+    fn lpstat_ignores_other_lines_and_locales() {
+        // Localized output (why queues() sets LC_ALL=C) and noise give nothing.
+        let text = "Gerät für L800: usb://EPSON/L800?serial=X\n\
+                    périphérique pour L800 : usb://EPSON/L800\n\
+                    system default destination: L800\n\
+                    device for NoSep:usb://EPSON/L800\n\
+                    \n";
+        assert_eq!(parse_lpstat_v(text), vec![]);
+        assert_eq!(parse_lpstat_v(""), vec![]);
+        // Indented lines are not lpstat's "device for" lines either.
+        assert_eq!(parse_lpstat_v("  device for L800: usb://EPSON/L800\n"), vec![]);
+    }
+
+    #[test]
+    fn uri_serial_param() {
+        assert_eq!(uri_param("usb://EPSON/L800?interface=1&serial=S1", "serial").as_deref(), Some("S1"));
+        // Look-alike keys are not "serial".
+        assert_eq!(uri_param("usb://EPSON/L800?xserial=A&serialx=B&serial=C", "serial").as_deref(), Some("C"));
+        assert_eq!(uri_param("usb://EPSON/L800?serial=S%2F1", "serial").as_deref(), Some("S/1"));
+        assert_eq!(uri_param("usb://EPSON/L800", "serial"), None);
+        assert_eq!(uri_param("usb://EPSON/L800?serial=", "serial").as_deref(), Some(""));
+        // Only usb:// URIs carry MFG/MDL.
+        assert_eq!(uri_device_id("ipp://EPSON/L800"), None);
+        assert_eq!(uri_device_id("usb://EPSON"), None);
+    }
+
+    #[test]
+    fn usb_match_serial_rules() {
+        let root = sysfs_with(
+            "rules",
+            &[
+                ("lp0", None, "MFG:EPSON;CMD:ESCPL2,D4;MDL:NoSerial;"),
+                ("lp1", Some("  SER1 \n"), L800_ID),
+                ("hiddev0", Some("SER2"), L800_ID),
+            ],
+        );
+        // An empty serial never matches, not even lp0 with no serial at all.
+        assert_eq!(usb_match(&root, ""), None);
+        // The sysfs serial is trimmed; the match is exact (no prefix).
+        assert_eq!(usb_match(&root, "SER1").map(|m| m.0), Some(PathBuf::from("/dev/usb/lp1")));
+        assert_eq!(usb_match(&root, "SER"), None);
+        assert_eq!(usb_match(&root, "ser1"), None);
+        // Only lpN entries count.
+        assert_eq!(usb_match(&root, "SER2"), None);
+        // No usbmisc directory at all.
+        assert_eq!(usb_match(&root.join("missing"), "SER1"), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn identity_fallbacks() {
+        let root = sysfs_with("fallback", &[("lp2", Some("S9"), L800_ID)]);
+        // A serial on a non-USB URI does not pick the USB device.
+        let i = Identity::from_parts("N", "ipp://10.0.0.5/?serial=S9".into(), String::new(), &root, None);
+        assert_eq!((i.source, i.serial.clone()), (Source::None, None));
+        // usb:// with an empty serial: the URI's MDL, never a sysfs device.
+        let i = Identity::from_parts("E", "usb://EPSON/L800?serial=".into(), String::new(), &root, None);
+        assert_eq!((i.source, i.id.mdl()), (Source::Uri, Some("L800")));
+        assert_eq!(i.status_node_in(&root), None);
+        // usb:// without MDL falls through to the PPD.
+        let i = Identity::from_parts("P", "usb://EPSON?serial=GONE".into(), String::new(), &root, Some("MFG:EPSON;MDL:L800;"));
+        assert_eq!((i.source, i.id.mdl()), (Source::Ppd, Some("L800")));
+        // Nothing at all.
+        let i = Identity::from_parts("X", String::new(), String::new(), &root, None);
+        assert_eq!((i.source, i.id.clone()), (Source::None, DeviceId::default()));
+        // Status node needs D4 in the live ID.
+        fs::write(root.join("lp2-usbdev/iface/ieee1284_id"), "MFG:EPSON;CMD:ESCPR1;MDL:X;").unwrap();
+        let i = Identity::from_parts("U", "usb://EPSON/X?serial=S9".into(), String::new(), &root, None);
+        assert_eq!(i.source, Source::Usb);
+        assert_eq!(i.status_node_in(&root), None);
         fs::remove_dir_all(root).unwrap();
     }
 }

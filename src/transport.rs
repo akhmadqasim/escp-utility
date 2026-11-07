@@ -80,8 +80,13 @@ fn lp_raw(queue: &str, name: &str, bytes: &[u8]) -> Result<Sent, String> {
 /// "Paused" gives message 3000). The CUPS equivalent is a disabled
 /// (stopped) queue or one that rejects jobs.
 pub fn queue_problem(queue: &str) -> Option<String> {
+    queue_problem_with("lpstat", queue)
+}
+
+/// `queue_problem` with the lpstat program named, so tests can use a stub.
+fn queue_problem_with(lpstat: &str, queue: &str) -> Option<String> {
     // C locale: the lines parsed below are translated in other locales.
-    let out = match Command::new("lpstat").env("LC_ALL", "C").args(["-p", queue, "-a", queue]).output() {
+    let out = match Command::new(lpstat).env("LC_ALL", "C").args(["-p", queue, "-a", queue]).output() {
         Ok(o) => o,
         Err(e) => return Some(format!("Cannot run lpstat: {e}")),
     };
@@ -147,5 +152,83 @@ mod tests {
         assert!(parse_queue_state("L800", paused).unwrap().contains("paused"));
         let rejecting = "printer L800 is idle.  enabled since x\nL800 not accepting requests since x -\n";
         assert!(parse_queue_state("L800", rejecting).unwrap().contains("not accepting"));
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("escp-transport-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A fake lpstat that prints `stdout`, `stderr` and exits with `code`.
+    fn stub(dir: &Path, stdout: &str, stderr: &str, code: i32) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("lpstat");
+        std::fs::write(&p, format!("#!/bin/sh\nprintf '%s' '{stdout}'\nprintf '%s' '{stderr}' >&2\nexit {code}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn dry_run_file_name_content_and_hexdump() {
+        let dir = scratch("dump");
+        let bytes: Vec<u8> = (0u8..20).chain(*b"AB").collect();
+        let sent = submit(&Mode::DryRun(dir.join("sub")), "L800", "head-cleaning", &bytes).unwrap();
+        let (path, dump) = sent.dump.unwrap();
+        let name = path.file_name().unwrap().to_str().unwrap();
+        // head-cleaning-YYYYMMDD-HHMMSS.bin
+        assert!(name.starts_with("head-cleaning-") && name.ends_with(".bin"), "{name}");
+        assert_eq!(name.len(), "head-cleaning-".len() + 15 + 4);
+        assert_eq!(path.parent().unwrap(), dir.join("sub"));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(sent.summary.contains("22 bytes") && sent.summary.contains("Nothing was sent"));
+        let lines: Vec<&str> = dump.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].starts_with("00000010  10 11 12 13 41 42"));
+        assert!(lines[1].ends_with("|....AB|") || lines[1].contains("AB"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn dry_run_unwritable_dir_is_an_error() {
+        let dir = scratch("ro");
+        let file = dir.join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        let err = submit(&Mode::DryRun(file.clone()), "L800", "x", b"1").unwrap_err();
+        assert!(err.contains("Cannot create"), "{err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn queue_state_ignores_other_queues_and_prefix_names() {
+        let other = "printer L800-2 disabled since x -\nL800-2 not accepting requests since x -\nprinter L800 is idle.  enabled since x\n";
+        assert_eq!(parse_queue_state("L800", other), None);
+        assert_eq!(parse_queue_state("L800", ""), None);
+        // Printing (busy) with jobs is fine.
+        let busy = "printer L800 now printing L800-12.  enabled since x\nL800 accepting requests since x\n";
+        assert_eq!(parse_queue_state("L800", busy), None);
+    }
+
+    #[test]
+    fn queue_problem_idle_paused_rejecting_via_stub() {
+        let dir = scratch("stub-ok");
+        let idle = stub(&dir, "printer L800 is idle.  enabled since x\nL800 accepting requests since x\n", "", 0);
+        assert_eq!(queue_problem_with(&idle, "L800"), None);
+        let paused = stub(&dir, "printer L800 disabled since x -\n\tPaused\nL800 accepting requests since x\n", "", 0);
+        assert!(queue_problem_with(&paused, "L800").unwrap().contains("paused"));
+        let rej = stub(&dir, "printer L800 is idle.  enabled since x\nL800 not accepting requests since x -\n", "", 0);
+        assert!(queue_problem_with(&rej, "L800").unwrap().contains("not accepting"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn queue_problem_missing_queue_and_lpstat_failure_are_errors() {
+        let dir = scratch("stub-err");
+        let missing = stub(&dir, "", "lpstat: Invalid destination name in list \"NOPE\".", 1);
+        let msg = queue_problem_with(&missing, "NOPE").unwrap();
+        assert!(msg.contains("NOPE") && msg.contains("Invalid destination"), "{msg}");
+        assert!(queue_problem_with(dir.join("absent").to_str().unwrap(), "L800").unwrap().starts_with("Cannot run lpstat"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

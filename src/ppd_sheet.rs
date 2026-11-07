@@ -709,6 +709,72 @@ mod tests {
         assert!(n > 600);
     }
 
+    /// Every escpr PPD: the defaults are complete and conflict-free, the
+    /// Type/Quality and Size/Borderless split gives back each MediaType and
+    /// PageSize choice exactly once, and saving then reading the listing
+    /// returns the same selection.
+    #[test]
+    fn escpr_corpus_decomposition() {
+        let Ok(dir) = std::env::var("ESCPR_PPD_DIR") else { return eprintln!("ESCPR_PPD_DIR unset: skipped") };
+        let (mut n, mut media_n, mut size_n) = (0, 0, 0);
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = e.path();
+            if path.extension().is_none_or(|x| x != "ppd") {
+                continue;
+            }
+            let s = Sheet::new(crate::ppd::parse(&std::fs::read_to_string(&path).unwrap()).unwrap());
+            let d = s.defaults();
+            assert!(s.ppd.conflicts(&d).is_empty(), "{path:?} defaults conflict");
+            for o in &s.ppd.options {
+                assert!(o.choice(&d[&o.keyword]).is_some(), "{path:?} default {}", o.keyword);
+            }
+            // MediaType: each choice in one entry, at its own radio; flattened back in PPD order.
+            let media = s.ppd.option(s.option_of(Slot::MediaType).unwrap()).unwrap();
+            let mut flat: Vec<&str> = s.media.iter().flat_map(|m| m.choices.iter().map(|c| c.1.as_str())).collect();
+            for m in &s.media {
+                let mut radios: Vec<usize> = m.choices.iter().map(|c| c.0).collect();
+                radios.dedup();
+                assert_eq!(radios.len(), m.choices.len(), "{path:?} {} radios", m.label);
+                assert!(!m.label.is_empty(), "{path:?} empty media label");
+            }
+            for c in &media.choices {
+                let (i, r) = s.media_of(&c.keyword).unwrap_or_else(|| panic!("{path:?} lost {}", c.keyword));
+                assert!(s.media[i].choices.iter().any(|x| x.0 == r && x.1 == c.keyword));
+                media_n += 1;
+            }
+            let mut want: Vec<&str> = media.choices.iter().map(|c| c.keyword.as_str()).collect();
+            flat.sort_unstable();
+            want.sort_unstable();
+            assert_eq!(flat, want, "{path:?} MediaType");
+            // PageSize: plain sizes plus T variants, each exactly once.
+            let size = s.ppd.option(s.option_of(Slot::PageSize).unwrap()).unwrap();
+            let mut flat: Vec<&str> = s.sizes.iter().flat_map(|z| std::iter::once(z.plain.as_str()).chain(z.borderless.as_deref())).collect();
+            for c in &size.choices {
+                let (i, b) = s.size_of(&c.keyword).unwrap_or_else(|| panic!("{path:?} lost {}", c.keyword));
+                assert_eq!(if b { s.sizes[i].borderless.as_deref() } else { Some(s.sizes[i].plain.as_str()) }, Some(c.keyword.as_str()));
+                size_n += 1;
+            }
+            let mut want: Vec<&str> = size.choices.iter().map(|c| c.keyword.as_str()).collect();
+            flat.sort_unstable();
+            want.sort_unstable();
+            assert_eq!(flat, want, "{path:?} PageSize");
+            // Save -> load is the identity, for the defaults and each paper
+            // the Type list offers (a paper no size allows is never listed).
+            let mut sels = vec![d.clone()];
+            sels.extend(s.view(&d).media.items.iter().map(|&(i, _)| s.apply(&d, &Edit::Media(i))));
+            for sel in &sels {
+                assert!(s.ppd.conflicts(sel).is_empty(), "{path:?} {sel:?} conflicts");
+                let saved: Selection = s.to_options(sel).into_iter().collect();
+                let mut back = s.read_listing(&listing(&s, &saved));
+                back.remove("PageRegion");
+                assert_eq!(back, saved, "{path:?} round trip");
+            }
+            n += 1;
+        }
+        eprintln!("{n} PPDs, {media_n} MediaType and {size_n} PageSize choices");
+        assert!(n > 600);
+    }
+
     #[test]
     fn base_labels() {
         assert_eq!(base_label(&["plain papers-High", "plain papers-Standard-Vivid", "plain papers-Standard"]), "plain papers");
@@ -728,4 +794,194 @@ mod tests {
         assert_eq!(Std::parse(&dest), s);
         assert_eq!(Std::parse("copies=1 number-up=1"), Std::default());
     }
+
+    /// A mini escpr-like PPD: quality as MediaType suffix, borderless as `T`
+    /// PageSize, Ink=MONO grayscale, a Duplex leftover, UTF-8 labels.
+    const MINI: &str = r#"*PPD-Adobe: "4.3"
+*NickName: "EPSON Mini Series, epson-escpr"
+*OpenUI *PageSize/Paper Size: PickOne
+*DefaultPageSize: A4
+*PageSize A4/A4: ""
+*PageSize TA4/A4 (Borderless): ""
+*PageSize LETTER/Letter: ""
+*CloseUI: *PageSize
+*OpenUI *PageRegion/Paper Region: PickOne
+*DefaultPageRegion: A4
+*PageRegion A4/A4: ""
+*PageRegion TA4/A4 (Borderless): ""
+*PageRegion LETTER/Letter: ""
+*CloseUI: *PageRegion
+*OpenUI *MediaType/Media Type: PickOne
+*DefaultMediaType: PLAIN_NORMAL
+*MediaType PLAIN_DRAFT/plain papers-Draft: ""
+*MediaType PLAIN_NORMAL/plain papers-Standard: ""
+*MediaType PLAIN_HIGH/plain papers-High: ""
+*MediaType PHOTO_NORMAL/Papier-é: ""
+*MediaType PHOTO_HIGH/Papier-è: ""
+*MediaType JP_NORMAL/写真用紙-標準: ""
+*CloseUI: *MediaType
+*OpenUI *Ink/Ink: PickOne
+*DefaultInk: COLOR
+*Ink COLOR/Color: ""
+*Ink MONO/Black: ""
+*CloseUI: *Ink
+*OpenUI *Duplex/Duplex Tumble: PickOne
+*DefaultDuplex: None
+*Duplex None/Off: ""
+*Duplex DuplexNoTumble/2-sided long edge: ""
+*CloseUI: *Duplex
+*UIConstraints: *PageSize TA4 *MediaType PLAIN_DRAFT
+*UIConstraints: *MediaType PLAIN_DRAFT *PageSize TA4
+*UIConstraints: *PageSize TA4 *MediaType PLAIN_NORMAL
+*UIConstraints: *MediaType PLAIN_NORMAL *PageSize TA4
+*UIConstraints: *PageSize TA4 *MediaType PLAIN_HIGH
+*UIConstraints: *MediaType PLAIN_HIGH *PageSize TA4
+"#;
+
+    fn mini() -> Sheet {
+        Sheet::new(crate::ppd::parse(MINI).unwrap())
+    }
+
+    #[test]
+    fn mini_media_quality_decomposed() {
+        let s = mini();
+        assert_eq!(s.quality, Quality::InMedia);
+        let labels: Vec<&str> = s.media.iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(labels, ["plain papers", "Papier", "写真用紙"]);
+        let radios = |i: usize| s.media[i].choices.iter().map(|c| (c.0, c.2.as_str())).collect::<Vec<_>>();
+        assert_eq!(radios(0), [(1, "Draft"), (2, "Standard"), (3, "High")]);
+        assert_eq!(radios(1), [(2, "é"), (3, "è")]);
+        assert_eq!(radios(2), [(2, "標準")]);
+        let v = s.view(&s.defaults());
+        assert_eq!((v.media.labels()[v.media.pos], v.quality), ("plain papers", Some(2)));
+        assert_eq!(v.quality_enabled, [false, true, true, true, false]);
+        assert_eq!(v.quality_labels[1..4], ["Draft", "Standard", "High"]);
+        assert_eq!(v.adv_quality.labels(), ["Draft", "Standard", "High"]);
+    }
+
+    #[test]
+    fn mini_quality_recomposes_exact_keyword() {
+        let s = mini();
+        let d = s.defaults();
+        for (r, want) in [(1, "PLAIN_DRAFT"), (2, "PLAIN_NORMAL"), (3, "PLAIN_HIGH")] {
+            let sel = s.apply(&d, &Edit::Quality(r));
+            assert_eq!(sel["MediaType"], want);
+            assert_eq!(s.view(&sel).quality, Some(r));
+            round_trip(&s, &sel);
+        }
+        // A radio the paper lacks changes nothing.
+        assert_eq!(s.apply(&d, &Edit::Quality(0))["MediaType"], "PLAIN_NORMAL");
+        // Paper change keeps the radio where it can, else the nearest.
+        let high = s.apply(&d, &Edit::Quality(3));
+        assert_eq!(s.apply(&high, &Edit::Media(1))["MediaType"], "PHOTO_HIGH");
+        let draft = s.apply(&d, &Edit::Quality(1));
+        assert_eq!(s.apply(&draft, &Edit::Media(1))["MediaType"], "PHOTO_NORMAL");
+        assert_eq!(s.apply(&draft, &Edit::Media(2))["MediaType"], "JP_NORMAL");
+        let back = s.apply(&s.apply(&draft, &Edit::Media(1)), &Edit::Media(0));
+        assert_eq!(back["MediaType"], "PLAIN_NORMAL");
+    }
+
+    #[test]
+    fn mini_borderless_is_t_pagesize() {
+        let s = mini();
+        let sizes: Vec<_> = s.sizes.iter().map(|z| (z.plain.as_str(), z.borderless.as_deref())).collect();
+        assert_eq!(sizes, [("A4", Some("TA4")), ("LETTER", None)]);
+        let d = s.defaults();
+        let v = s.view(&d);
+        assert_eq!(v.size.labels(), ["A4", "Letter"]);
+        // Plain paper forbids TA4.
+        assert!(!v.borderless && !v.borderless_allowed);
+        let photo = s.apply(&d, &Edit::Media(1));
+        assert!(s.view(&photo).borderless_allowed);
+        let bl = s.apply(&photo, &Edit::Borderless(true));
+        assert_eq!(bl["PageSize"], "TA4");
+        let v = s.view(&bl);
+        assert!(v.borderless && v.borderless_allowed);
+        assert_eq!(v.size.labels()[v.size.pos], "A4");
+        assert!(!v.media.labels().contains(&"plain papers"), "{:?}", v.media.labels());
+        round_trip(&s, &bl);
+        // Letter has no variant: borderless drops and is not allowed.
+        let letter = s.apply(&bl, &Edit::Size(1));
+        assert_eq!(letter["PageSize"], "LETTER");
+        let v = s.view(&letter);
+        assert!(!v.borderless && !v.borderless_allowed);
+        assert_eq!(s.apply(&letter, &Edit::Borderless(true))["PageSize"], "LETTER");
+        // Back to A4 plain; borderless off restores the plain size.
+        assert_eq!(s.apply(&bl, &Edit::Borderless(false))["PageSize"], "A4");
+        // Size edit keeps borderless when the new size has a variant.
+        assert_eq!(s.apply(&bl, &Edit::Size(0))["PageSize"], "TA4");
+        // Edited PageSize wins over a forbidding MediaType.
+        let forced = s.apply(&s.apply(&bl, &Edit::Media(0)), &Edit::Borderless(true));
+        assert!(s.ppd.conflicts(&forced).is_empty());
+    }
+
+    #[test]
+    fn mini_grayscale_is_ink_mono() {
+        let s = mini();
+        let b = &s.map.slots[&Slot::Grayscale];
+        assert_eq!((b.option.as_str(), b.choice.as_deref()), ("Ink", Some("MONO")));
+        let d = s.defaults();
+        assert_eq!(s.view(&d).grayscale, Some(false));
+        let g = s.apply(&d, &Edit::Grayscale(true));
+        assert_eq!(g["Ink"], "MONO");
+        assert_eq!(s.view(&g).grayscale, Some(true));
+        let c = s.apply(&g, &Edit::Grayscale(false));
+        assert_eq!(c["Ink"], "COLOR");
+        round_trip(&s, &g);
+    }
+
+    #[test]
+    fn mini_missing_slots_greyed_and_leftovers() {
+        let s = mini();
+        assert_eq!(s.map.leftovers, ["Duplex"]);
+        let v = s.view(&s.defaults());
+        assert_eq!(v.levels, [None; 6]);
+        assert!(!v.source.present && !v.color_mode.present && !v.gamma.present);
+        assert!(v.source.items.is_empty());
+        assert!(v.media.present && v.size.present);
+        assert_eq!(v.leftovers.len(), 1);
+        let (k, label, f) = &v.leftovers[0];
+        assert_eq!((k.as_str(), label.as_str(), f.labels()[f.pos]), ("Duplex", "Duplex Tumble", "Off"));
+        assert_eq!(f.labels(), ["Off", "2-sided long edge"]);
+        let sel = s.apply(&s.defaults(), &Edit::Choice("Duplex".into(), "DuplexNoTumble".into()));
+        let f = &s.view(&sel).leftovers[0].2;
+        assert_eq!(f.labels()[f.pos], "2-sided long edge");
+        assert!(!s.to_options(&sel).iter().any(|(k, _)| k == "PageRegion"));
+        // No-op edits on absent slots.
+        let d = s.defaults();
+        assert_eq!(s.apply(&d, &Edit::Level(Slot::Cyan, 5)), d);
+    }
+
+    #[test]
+    fn mini_without_suffix_or_slots() {
+        // One MediaType choice without a level: no quality, labels kept whole.
+        let text = MINI.replace("*MediaType JP_NORMAL/写真用紙-標準: \"\"", "*MediaType CD/CD/DVD-Ö: \"\"");
+        let s = Sheet::new(crate::ppd::parse(&text).unwrap());
+        assert_eq!(s.quality, Quality::None);
+        assert_eq!(s.media.len(), 6);
+        assert_eq!(s.media[3].label, "Papier-é");
+        let v = s.view(&s.defaults());
+        assert_eq!((v.quality, v.adv_quality.present), (None, false));
+        assert_eq!(v.quality_enabled, [false; RADIOS]);
+        assert_eq!(s.apply(&s.defaults(), &Edit::Quality(3)), s.defaults());
+        // No MediaType / Ink at all: greyed, and nothing panics.
+        let bare = "*PPD-Adobe: \"4.3\"\n*OpenUI *PageSize/Größe: PickOne\n*DefaultPageSize: A4\n*PageSize A4/Ä4: \"\"\n*CloseUI: *PageSize\n";
+        let s = Sheet::new(crate::ppd::parse(bare).unwrap());
+        let v = s.view(&s.defaults());
+        assert!(!v.media.present && v.media.items.is_empty());
+        assert_eq!((v.grayscale, v.quality), (None, None));
+        assert_eq!(v.size.labels(), ["Ä4"]);
+        assert!(!v.borderless_allowed);
+        assert_eq!(s.apply(&s.defaults(), &Edit::Grayscale(true)), s.defaults());
+        assert!(s.map.leftovers.is_empty());
+    }
+
+    #[test]
+    fn base_label_multibyte_no_panic() {
+        assert_eq!(base_label(&["写真用紙-高品質", "写真用紙-標準"]), "写真用紙");
+        // 高 and 髙 share their first two bytes.
+        assert_eq!(base_label(&["紙高", "紙髙"]), "紙");
+        assert_eq!(base_label(&["ñ", "ö"]), "");
+    }
+
 }

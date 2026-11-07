@@ -1759,4 +1759,65 @@ mod tests {
         assert!(a.report);
         assert_eq!(a.profile, Some(PathBuf::from("p.toml")));
     }
+    #[test]
+    fn utility_flag_alone() {
+        let a = args(&["--utility"]).unwrap();
+        assert!(a.utility && !a.report && a.dump_dir.is_none());
+        assert!(!args(&[]).unwrap().utility);
+    }
+
+    #[test]
+    fn dry_run_without_dir_uses_default() {
+        let a = args(&["--dry-run"]).unwrap();
+        assert_eq!(a.dump_dir, Some(transport::default_dump_dir()));
+    }
+
+    /// --dump-dir may come before --dry-run; the check runs after parsing.
+    #[test]
+    fn dump_dir_order_does_not_matter() {
+        let a = args(&["--dump-dir", "/tmp/x", "--dry-run"]).unwrap();
+        assert_eq!(a.dump_dir, Some(PathBuf::from("/tmp/x")));
+        assert_eq!(args(&["--dump-dir", "/tmp/x"]).err().unwrap(), "--dump-dir needs --dry-run");
+    }
+
+    #[test]
+    fn missing_values_name_the_flag() {
+        for f in ["--queue", "--profile", "--dump-dir"] {
+            assert_eq!(args(&["--dry-run", f]).err().unwrap(), format!("{f} needs a value"));
+        }
+    }
+
+    /// A flag's value is taken as-is, even when it looks like a flag.
+    #[test]
+    fn value_is_next_arg_verbatim() {
+        let a = args(&["--queue", "--utility"]).unwrap();
+        assert_eq!(a.queue.as_deref(), Some("--utility"));
+        assert!(!a.utility);
+    }
+
+    #[test]
+    fn repeated_flags_last_wins() {
+        let a = args(&["--queue", "A", "--queue", "B", "--profile", "x", "--profile", "y", "--utility", "--utility"]).unwrap();
+        assert_eq!(a.queue.as_deref(), Some("B"));
+        assert_eq!(a.profile, Some(PathBuf::from("y")));
+        assert!(a.utility);
+    }
+
+    #[test]
+    fn unknown_argument_names_it_and_shows_usage() {
+        let e = args(&["--queue", "Q", "--colour"]).err().unwrap();
+        assert!(e.starts_with("unknown argument: --colour\n"), "{e}");
+        assert!(e.ends_with(USAGE));
+        // Positional args and single-dash typos are rejected too.
+        assert!(args(&["L800"]).is_err());
+        assert!(args(&["-u"]).is_err());
+    }
+
+    /// --help prints USAGE and exits, so check USAGE covers every flag.
+    #[test]
+    fn usage_lists_every_flag() {
+        for f in ["--utility", "--dry-run", "--dump-dir", "--queue", "--profile", "--report"] {
+            assert!(USAGE.contains(f), "{f}");
+        }
+    }
 }

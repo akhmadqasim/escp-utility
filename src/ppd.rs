@@ -499,6 +499,71 @@ setpagedevice"
         }
     }
 
+    const H: &str = "*PPD-Adobe: \"4.3\"\n";
+
+    #[test]
+    fn error_line_numbers_count_lines_inside_quoted_values() {
+        let text = format!("{H}*Foo: \"a\nb\nc\"\r\n*OpenUI *A: PickSome\r\n");
+        assert_eq!(parse(&text).unwrap_err(), "line 5: unknown UI type \"PickSome\"");
+    }
+
+    #[test]
+    fn multiline_value_with_crlf_and_star_lines_adds_no_choices() {
+        let text = format!("{H}*OpenUI *A/A: PickOne\r\n*A X/X: \"\r\n*A Y/Y: \"\"\r\n*CloseUI: *A\r\n");
+        // The X value is still open, so `*A Y/Y: ""` is its closing text, not a choice.
+        let p = parse(&text).unwrap();
+        assert_eq!(keywords(&p.options[0].choices.iter().collect::<Vec<_>>()), ["X"]);
+    }
+
+    #[test]
+    fn defaults_bind_regardless_of_position_last_wins_unknown_dropped() {
+        let text = format!(
+            "{H}*DefaultA: One\n*DefaultA: Two\n*DefaultGhost: X\n*OpenUI *A: PickOne\n*A One: \"\"\n*A Two: \"\"\n*CloseUI: *A\n*OpenUI *B: Boolean\n*B True: \"\"\n*CloseUI: *B\n*DefaultB: True\n"
+        );
+        let p = parse(&text).unwrap();
+        assert_eq!(p.option("A").unwrap().default.as_deref(), Some("Two"));
+        assert_eq!(p.option("B").unwrap().default.as_deref(), Some("True"));
+        assert!(p.option("Ghost").is_none());
+    }
+
+    #[test]
+    fn localized_and_foreign_lines_inside_open_ui_are_ignored() {
+        let text = format!(
+            "{H}*OpenUI *A/CD<2F>DVD: PickOne\n*de.OpenUI *A/X: PickSome\n*zh_TW.A One/壹: \"\"\n*A\tOne/Tab<2F>Sep: \"\"\n*B Stray/Stray: \"\"\n*A /NoName: \"\"\n*CloseUI: *A\n"
+        );
+        let p = parse(&text).unwrap();
+        let o = p.option("A").unwrap();
+        assert_eq!(o.label, "CD/DVD");
+        assert_eq!(o.choices, [Choice { keyword: "One".into(), label: "Tab/Sep".into() }]);
+    }
+
+    #[test]
+    fn duplicate_choice_lines_are_kept_in_order() {
+        let text = format!("{H}*OpenUI *A: PickOne\n*A X/First: \"\"\n*A X/Second: \"\"\n*CloseUI: *A\n");
+        let p = parse(&text).unwrap();
+        let labels: Vec<_> = p.options[0].choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["First", "Second"]);
+    }
+
+    #[test]
+    fn jcl_open_closed_by_plain_close_ui_and_mismatch_errs() {
+        assert!(parse(&format!("{H}*JCLOpenUI *J: PickOne\n*CloseUI: *J\n")).is_ok());
+        let e = parse(&format!("{H}*JCLOpenUI *J: PickOne\n*OpenUI *K: Boolean\n")).unwrap_err();
+        assert_eq!(e, "line 3: *OpenUI inside *OpenUI *J");
+    }
+
+    #[test]
+    fn truncated_input_never_panics() {
+        // Every prefix (at char boundaries) of a full PPD, with LF and CRLF.
+        for src in [SYNTAX.to_string(), SYNTAX.replace('\n', "\r\n")] {
+            for (i, _) in src.char_indices() {
+                let _ = parse(&src[..i]);
+            }
+        }
+        assert!(parse("").is_err());
+        assert!(parse("*PPD-Adobe:").unwrap().options.is_empty());
+    }
+
     const RULES: &str = r#"*PPD-Adobe: "4.3"
 *UIConstraints: *MediaType Photo *Quality Draft
 *UIConstraints: *Quality Draft *MediaType Photo
@@ -607,6 +672,125 @@ setpagedevice"
                 }
             }
         }
+    }
+
+    const CHAIN: &str = r#"*PPD-Adobe: "4.3"
+*UIConstraints: *A a1 *B b1
+*UIConstraints: *B b2 *C c1
+*UIConstraints: *Ghost x *A a2
+*UIConstraints: *Borderless True *Margins Wide
+*UIConstraints: *A a3 *Borderless False
+*OpenUI *A: PickOne
+*DefaultA: a1
+*A a1: ""
+*A a2: ""
+*A a3: ""
+*CloseUI: *A
+*OpenUI *B: PickOne
+*DefaultB: b1
+*B b1: ""
+*B b2: ""
+*CloseUI: *B
+*OpenUI *C: PickOne
+*DefaultC: c1
+*C c1: ""
+*C c2: ""
+*CloseUI: *C
+*OpenUI *Borderless/Borderless: Boolean
+*DefaultBorderless: False
+*Borderless True/On: ""
+*Borderless False/Off: ""
+*CloseUI: *Borderless
+*OpenUI *Margins: PickOne
+*DefaultMargins: Wide
+*Margins Wide: ""
+*Margins Narrow: ""
+*CloseUI: *Margins
+"#;
+
+    #[test]
+    fn one_line_constrains_both_sides() {
+        let p = parse(CHAIN).unwrap();
+        // Only `*A a1 *B b1` is written; it still limits B from A and A from B.
+        assert_eq!(keywords(&p.allowed_choices("B", &sel(&[("A", "a1"), ("C", "c2")]))), ["b2"]);
+        assert_eq!(keywords(&p.allowed_choices("A", &sel(&[("B", "b1"), ("Borderless", "True")]))), ["a2", "a3"]);
+        assert_eq!(p.conflicts(&sel(&[("A", "a1"), ("B", "b1")])).len(), 1);
+    }
+
+    #[test]
+    fn resolve_follows_a_chain() {
+        let p = parse(CHAIN).unwrap();
+        // Defaults a1+b1 conflict: A (first) wins, B -> b2, which pushes C off c1.
+        let out = p.resolve(&Selection::new(), None);
+        assert_eq!(out["A"], "a1");
+        assert_eq!(out["B"], "b2");
+        assert_eq!(out["C"], "c2");
+        assert!(p.conflicts(&out).is_empty());
+        // Editing C to c1: the edit holds, A keeps a1 (settled before B), and B
+        // has no fitting choice, so a conflict stays although a2/b1/c1 exists.
+        // Greedy, no backtracking: documents current behaviour.
+        let edited = p.resolve(&sel(&[("A", "a1"), ("B", "b2"), ("C", "c1")]), Some("C"));
+        assert_eq!((edited["A"].as_str(), edited["B"].as_str(), edited["C"].as_str()), ("a1", "b2", "c1"));
+        assert_eq!(p.conflicts(&edited).len(), 1);
+    }
+
+    #[test]
+    fn constraints_on_unknown_options_are_inert() {
+        let p = parse(CHAIN).unwrap();
+        // `*Ghost x *A a2`: Ghost has no value, so a2 stays allowed.
+        assert!(keywords(&p.allowed_choices("A", &Selection::new())).contains(&"a2".to_string()));
+        // A stray Ghost key in sel neither limits A nor survives resolve.
+        let s = sel(&[("Ghost", "x"), ("A", "a2"), ("B", "b1")]);
+        let out = p.resolve(&s, None);
+        assert_eq!(out["A"], "a2");
+        assert!(!out.contains_key("Ghost"));
+        assert!(p.allowed_choices("Ghost", &s).is_empty());
+        assert_eq!(p.resolve(&s, Some("Ghost")), out);
+    }
+
+    #[test]
+    fn boolean_true_false_constraints() {
+        let p = parse(CHAIN).unwrap();
+        // Default False: Margins free, but A a3 is ruled out.
+        assert_eq!(keywords(&p.allowed_choices("Margins", &Selection::new())), ["Wide", "Narrow"]);
+        assert!(!keywords(&p.allowed_choices("A", &sel(&[("B", "b2")]))).contains(&"a3".to_string()));
+        // True: Wide is ruled out, a3 is allowed.
+        let on = sel(&[("Borderless", "True"), ("B", "b2")]);
+        assert_eq!(keywords(&p.allowed_choices("Margins", &on)), ["Narrow"]);
+        assert_eq!(keywords(&p.allowed_choices("Borderless", &sel(&[("Margins", "Wide")]))), ["False"]);
+        assert!(keywords(&p.allowed_choices("A", &on)).contains(&"a3".to_string()));
+        // Turning Borderless on moves Margins off its default.
+        let out = p.resolve(&sel(&[("Borderless", "True"), ("Margins", "Wide")]), Some("Borderless"));
+        assert_eq!((out["Borderless"].as_str(), out["Margins"].as_str()), ("True", "Narrow"));
+        // Lowercase is not a choice keyword: falls back to the default.
+        assert_eq!(p.resolve(&sel(&[("Borderless", "true")]), None)["Borderless"], "False");
+    }
+
+    #[test]
+    fn resolve_edge_fallbacks() {
+        let h = "*PPD-Adobe: \"4.3\"\n";
+        // Default names no choice: first allowed choice instead.
+        let p = parse(&format!(
+            "{h}*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*DefaultX: x1\n*X x1: \"\"\n*CloseUI: *X\n\
+             *OpenUI *Y: PickOne\n*DefaultY: Missing\n*Y y1: \"\"\n*Y y2: \"\"\n*CloseUI: *Y\n"
+        ))
+        .unwrap();
+        assert_eq!(p.resolve(&Selection::new(), None), sel(&[("X", "x1"), ("Y", "y2")]));
+        // An invalid value is not kept.
+        assert_eq!(p.resolve(&sel(&[("Y", "nope")]), Some("X")), sel(&[("X", "x1"), ("Y", "y2")]));
+        // Unsatisfiable: Y's only choice conflicts; it keeps its value, the conflict stays.
+        let q = parse(&format!(
+            "{h}*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*DefaultX: x1\n*X x1: \"\"\n*CloseUI: *X\n\
+             *OpenUI *Y: PickOne\n*DefaultY: y1\n*Y y1: \"\"\n*CloseUI: *Y\n"
+        ))
+        .unwrap();
+        let out = q.resolve(&Selection::new(), None);
+        assert_eq!(out, sel(&[("X", "x1"), ("Y", "y1")]));
+        assert_eq!(q.conflicts(&out).len(), 1);
+        assert!(q.allowed_choices("Y", &out).is_empty());
+        // An option with no choices is left out.
+        let e = parse(&format!("{h}*OpenUI *E: PickOne\n*DefaultE: z\n*CloseUI: *E\n")).unwrap();
+        assert!(e.resolve(&sel(&[("E", "z")]), Some("E")).is_empty());
     }
 
     #[test]

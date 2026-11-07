@@ -763,6 +763,85 @@ YellowValue/Yellow: -25 *0 25
     }
 
     #[test]
+    fn save_args_keep_each_value_one_argv_word() {
+        // No shell: spaces, quotes and backslashes go to lpoptions verbatim.
+        let opts = [("job-sheets", "a b"), ("printer-info", "Bob's \"L800\""), ("x", "c:\\d")].map(|(k, v)| (k.to_string(), v.to_string()));
+        let a = save_args("L800 inst", opts);
+        assert_eq!(a, ["-p", "L800 inst", "-o", "job-sheets=a b", "-o", "printer-info=Bob's \"L800\"", "-o", "x=c:\\d"]);
+    }
+
+    #[test]
+    fn save_args_empty_options_only_name_the_queue() {
+        assert_eq!(save_args("L800/photo", Vec::new()), ["-p", "L800/photo"]);
+    }
+
+    #[test]
+    fn dest_values_quotes_and_escapes() {
+        // lpoptions output: single-quoted values with \' and \\ escaped.
+        let m = parse_dest_options(r#"a='it\'s' b='c:\\d' c="q" d=x\ y e="two words""#);
+        assert_eq!(m["a"], "it's");
+        assert_eq!(m["b"], "c:\\d");
+        assert_eq!(m["c"], "q");
+        assert_eq!(m["d"], "x y");
+        assert_eq!(m["e"], "two words");
+        assert_eq!(m.len(), 5);
+    }
+
+    #[test]
+    fn dest_values_whitespace_and_empty() {
+        assert!(parse_dest_options("").is_empty());
+        assert!(parse_dest_options("  \n\t ").is_empty());
+        let m = parse_dest_options("  copies=3\n collate=true  ");
+        assert_eq!((m["copies"].as_str(), m["collate"].as_str()), ("3", "true"));
+        // A later duplicate wins (lpoptions merges system then user values).
+        assert_eq!(parse_dest_options("copies=2 copies=5")["copies"], "5");
+        // An '=' inside a value stays in it.
+        assert_eq!(parse_dest_options("k=a=b")["k"], "a=b");
+    }
+
+    #[test]
+    fn std_round_trips_through_dest_text() {
+        for s in [
+            Std::default(),
+            Std { landscape: true, reverse: true, multi_page: true, pages_index: PAGES_PER_SHEET.len() - 1, page_borders: true, copies: 9999, collate: true },
+        ] {
+            let text: Vec<String> = s.to_options().into_iter().map(|(k, v)| format!("{k}={v}")).collect();
+            assert_eq!(Std::parse(&text.join(" ")), s);
+        }
+    }
+
+    #[test]
+    fn std_rejects_out_of_range_dest_values() {
+        let s = Std::parse("copies=0 number-up=3 orientation-requested=6 page-border=none");
+        assert_eq!(s, Std::default());
+        assert_eq!(Std::parse("copies=10000").copies, 1);
+        assert!(Std::parse("orientation-requested=5").landscape);
+    }
+
+    #[test]
+    fn l800_values_round_trip_through_lpoptions_text() {
+        // Save -> what `lpoptions -p Q -l` / `lpoptions -p Q` would show -> parse.
+        let v = Values { quality: 3, grayscale: true, brightness: -25, yellow: 25, landscape: true, copies: 4, collate: true, ..Values::default() };
+        let opts = v.to_options();
+        let saved: BTreeMap<String, String> = opts.iter().cloned().collect();
+        let listing: String = LISTING
+            .lines()
+            .map(|l| {
+                let (head, choices) = l.split_once(": ").unwrap();
+                let key = head.split('/').next().unwrap();
+                let cs: Vec<String> = choices
+                    .split_whitespace()
+                    .map(|c| c.trim_start_matches('*'))
+                    .map(|c| if saved.get(key).map(String::as_str) == Some(c) { format!("*{c}") } else { c.to_string() })
+                    .collect();
+                format!("{head}: {}\n", cs.join(" "))
+            })
+            .collect();
+        let dest: Vec<String> = opts.iter().filter(|(k, _)| k.contains('-') || k == "copies" || k == "collate" || k == "outputorder").map(|(k, v)| format!("{k}={v}")).collect();
+        assert_eq!(Values::parse(&listing, &dest.join(" ")), v.constrained());
+    }
+
+    #[test]
     fn tables_match_the_ppd() {
         let ppd = parse_ppd_listing(LISTING);
         assert_eq!(ppd["PageSize"], SIZES[0].ppd);
@@ -776,5 +855,119 @@ YellowValue/Yellow: -25 *0 25
         }
         let out = choices("OutputPaper");
         assert!(output_sizes().iter().all(|ch| out.iter().any(|h| h == ch.ppd)));
+    }
+}
+
+/// Constraint and preset rules of the L800 settings model, checked over
+/// every combination rather than single examples.
+#[cfg(test)]
+mod constraint_tests {
+    use super::*;
+
+    fn opt(v: &Values, key: &str) -> String {
+        v.to_options().into_iter().find(|(k, _)| k == key).map(|(_, v)| v).unwrap()
+    }
+
+    #[test]
+    fn borderless_only_on_borderless_media_and_sizes() {
+        for (media, m) in MEDIA.iter().enumerate() {
+            for (size, z) in SIZES.iter().enumerate() {
+                let v = Values { media, size, borderless: true, ..Values::default() }.constrained();
+                let want = m.borderless && z.borderless && media != CD_DVD_MEDIA;
+                assert_eq!(v.borderless, want, "{} {}", m.ppd, z.ppd);
+                assert_eq!(opt(&v, "Borderless"), if want { "On" } else { "Off" });
+            }
+        }
+        // Never on the CD/DVD tray, whatever type or size was set.
+        let cd = Values { source: 1, media: 2, size: 1, borderless: true, ..Values::default() };
+        assert!(!cd.constrained().borderless);
+    }
+
+    #[test]
+    fn cd_dvd_forces_a4() {
+        for size in 0..SIZES.len() {
+            let tray = Values { source: 1, size, output_size: 5, ..Values::default() }.constrained();
+            assert_eq!((tray.size, tray.output_size), (0, 0));
+            assert_eq!(opt(&tray, "PageSize"), "A4");
+            let media = Values { media: CD_DVD_MEDIA, size, ..Values::default() }.constrained();
+            assert_eq!(media.size, 0);
+        }
+    }
+
+    #[test]
+    fn document_sizes_need_reduce_enlarge() {
+        for (i, ch) in SIZES.iter().enumerate() {
+            let v = Values { size: i, ..Values::default() }.constrained();
+            let doc = ["A3", "A3+", "A2", "B4", "B3"].contains(&ch.ppd);
+            assert_eq!(v.reduce, doc, "{}", ch.ppd);
+            assert_eq!(opt(&v, "ReduceEnlarge") != "Off", doc, "{}", ch.ppd);
+            // Document sizes are never offered as output paper.
+            assert_eq!(output_sizes().iter().any(|o| o.ppd == ch.ppd), !doc);
+        }
+    }
+
+    #[test]
+    fn gamma_18_not_with_vivid() {
+        for (color_mode, c) in COLOR_MODES.iter().enumerate() {
+            let v = Values { color_mode, gamma: 0, ..Values::default() };
+            let want = if c.ppd == "EPSONVivid" { "2.2" } else { "1.8" };
+            assert_eq!(opt(&v, "GammaValue"), want);
+        }
+    }
+
+    /// The PPD has no quiet mode, so nothing for it is saved.
+    #[test]
+    fn quiet_mode_is_never_saved() {
+        assert!(Values::default().to_options().iter().all(|(k, _)| !k.to_lowercase().contains("quiet")));
+    }
+
+    #[test]
+    fn greyed_reduce_enlarge_saves_off() {
+        for v in [
+            Values { media: 2, borderless: true, reduce: true, output_size: 3, ..Values::default() },
+            Values { source: 1, reduce: true, by_percent: true, scale: 250, ..Values::default() },
+        ] {
+            assert!(!v.constrained().reduce_active());
+            assert_eq!(opt(&v, "ReduceEnlarge"), "Off");
+            assert_eq!(opt(&v, "ScaleRatio"), "100");
+            assert_eq!(opt(&v, "OutputPaper"), "A4");
+        }
+    }
+
+    #[test]
+    fn copies_out_of_range_read_as_one() {
+        for (dest, want) in [("copies=0", 1), ("copies=1", 1), ("copies=9999", 9999), ("copies=10000", 1), ("copies=-3", 1), ("copies=x", 1)] {
+            assert_eq!(Std::parse(dest).copies, want, "{dest}");
+        }
+    }
+
+    #[test]
+    fn presets_apply_only_their_fields() {
+        let start = Values {
+            quality: 4,
+            grayscale: true,
+            color_mode: 2,
+            gamma: 0,
+            reduce: true,
+            by_percent: true,
+            scale: 50,
+            copies: 7,
+            collate: true,
+            mirror: true,
+            brightness: 9,
+            ..Values::default()
+        };
+        for p in PRESETS {
+            let mut v = start.clone();
+            p.apply(&mut v);
+            assert_eq!((v.source, v.media, v.size, v.borderless, v.landscape), (p.source, p.media, p.size, p.borderless, p.landscape), "{}", p.name);
+            let mut rest = v.clone();
+            (rest.source, rest.media, rest.size, rest.borderless, rest.landscape) =
+                (start.source, start.media, start.size, start.borderless, start.landscape);
+            assert_eq!(rest, start, "{} changed other fields", p.name);
+            // Every preset is already valid: the constraints leave it as is.
+            let c = v.constrained();
+            assert_eq!((c.source, c.media, c.size, c.borderless), (p.source, p.media, p.size, p.borderless), "{}", p.name);
+        }
     }
 }

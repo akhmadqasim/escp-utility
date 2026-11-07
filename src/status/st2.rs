@@ -200,3 +200,166 @@ pub(crate) mod tests {
         assert_eq!(i[1].percent(), Some(100));
     }
 }
+
+#[cfg(test)]
+mod parser_edge_tests {
+    use super::*;
+
+    fn reply(payload: &[u8]) -> Vec<u8> {
+        let mut r = HEADER.to_vec();
+        r.extend((payload.len() as u16).to_le_bytes());
+        r.extend_from_slice(payload);
+        r
+    }
+
+    #[test]
+    fn empty_payload_is_complete() {
+        let r = parse(&reply(&[])).unwrap();
+        assert_eq!((r.declared_len, r.available_len), (0, 0));
+        assert!(r.fields.is_empty() && r.complete());
+    }
+
+    #[test]
+    fn length_is_little_endian_and_bytes_past_it_ignored() {
+        let mut b = HEADER.to_vec();
+        b.extend([0x03, 0x00, 0x01, 0x01, 0x04, 0xAA, 0xBB]);
+        let r = parse(&b).unwrap();
+        assert_eq!(r.declared_len, 3);
+        assert_eq!(r.available_len, 3);
+        assert_eq!(r.fields, vec![Field { id: 0x01, data: vec![0x04] }]);
+        assert!(r.complete());
+    }
+
+    #[test]
+    fn short_payload_not_complete_but_not_truncated() {
+        let mut b = HEADER.to_vec();
+        b.extend([0x10, 0x00, 0x01, 0x01, 0x04]);
+        let r = parse(&b).unwrap();
+        assert_eq!((r.declared_len, r.available_len), (16, 3));
+        assert!(!r.truncated && !r.complete());
+        assert_eq!(r.get(id::ST), Some(&[0x04][..]));
+    }
+
+    #[test]
+    fn dangling_id_byte_marks_truncated() {
+        let r = parse(&reply(&[0x01, 0x01, 0x04, 0x02])).unwrap();
+        assert!(r.truncated && !r.complete());
+        assert_eq!(r.fields.len(), 1);
+    }
+
+    #[test]
+    fn overlong_record_keeps_partial_data() {
+        let r = parse(&reply(&[0x1F, 0x0A, b'A', b'B'])).unwrap();
+        assert!(r.truncated);
+        assert_eq!(r.get(id::SN), Some(&b"AB"[..]));
+    }
+
+    #[test]
+    fn unknown_and_zero_length_fields_kept_in_order() {
+        let r = parse(&reply(&[0x7E, 0x00, 0xFF, 0x02, 9, 9, 0x01, 0x01, 0x04])).unwrap();
+        let ids: Vec<u8> = r.fields.iter().map(|f| f.id).collect();
+        assert_eq!(ids, vec![0x7E, 0xFF, 0x01]);
+        assert_eq!(r.get(0x7E), Some(&[][..]));
+        assert_eq!(r.get(0xFF), Some(&[9, 9][..]));
+        assert!(r.complete());
+    }
+
+    #[test]
+    fn get_returns_first_duplicate() {
+        let r = parse(&reply(&[0x01, 0x01, 0x04, 0x01, 0x01, 0x03])).unwrap();
+        assert_eq!(r.get(id::ST), Some(&[0x04][..]));
+    }
+
+    #[test]
+    fn header_after_garbage_and_header_only() {
+        let mut b = b"\x00garbage@BDC ST".to_vec();
+        b.extend(reply(&[0x01, 0x01, 0x04]));
+        assert_eq!(parse(&b).unwrap().get(id::ST), Some(&[0x04][..]));
+        assert_eq!(parse(HEADER), None);
+        assert_eq!(parse(b""), None);
+        assert_eq!(parse(b"@bdc st2\r\n\x00\x00"), None);
+    }
+
+    #[test]
+    fn garbage_and_truncations_never_panic() {
+        let full = super::tests::live();
+        for n in 0..=full.len() {
+            let _ = parse(&full[..n]);
+            let mut m = full[..n].to_vec();
+            mask_serial(&mut m);
+        }
+        let mut seed: u32 = 0x1234_5678;
+        for _ in 0..2000 {
+            let mut b = HEADER.to_vec();
+            for _ in 0..(seed % 300) {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                b.push((seed >> 16) as u8);
+            }
+            if let Some(r) = parse(&b) {
+                assert!(r.available_len <= r.declared_len);
+                for f in &r.fields {
+                    let _ = inks(&f.data);
+                }
+            }
+            mask_serial(&mut b);
+        }
+    }
+
+    #[test]
+    fn max_declared_length() {
+        let mut b = HEADER.to_vec();
+        b.extend([0xFF, 0xFF, 0x01, 0x01, 0x04]);
+        let r = parse(&b).unwrap();
+        assert_eq!(r.declared_len, 65535);
+        assert!(!r.complete());
+    }
+
+    #[test]
+    fn inks_n_entry_layouts() {
+        let four = [4, 1, 0, 81, 2, 3, 1, 47, 2, 4, 2, 37, 2, 5, 3, 27, 2];
+        assert_eq!(inks(&four).len(), 4);
+        assert_eq!(inks(&four)[3], Ink { ink_id: 5, color: 3, raw_level: 27 });
+        // Trailing partial entry is dropped.
+        assert_eq!(inks(&four[..four.len() - 1]).len(), 3);
+        // 3-byte entries accepted; sizes < 3 and empty data rejected.
+        assert_eq!(inks(&[3, 1, 0, 50]).len(), 1);
+        assert!(inks(&[2, 1, 0, 1, 0]).is_empty());
+        assert!(inks(&[0, 1, 2]).is_empty());
+        assert!(inks(&[]).is_empty());
+        assert!(inks(&[4]).is_empty());
+        // Larger entry size: extra bytes ignored.
+        let six = inks(&[6, 1, 0, 10, 9, 9, 9]);
+        assert_eq!(six, vec![Ink { ink_id: 1, color: 0, raw_level: 10 }]);
+    }
+
+    #[test]
+    fn percent_boundaries() {
+        let p = |raw| Ink { ink_id: 1, color: 0, raw_level: raw }.percent();
+        assert_eq!(p(0), Some(0));
+        assert_eq!(p(100), Some(100));
+        for raw in [101, 0x6E, 0x72, 0x77, 0xFB, 0xFF] {
+            assert_eq!(p(raw), None);
+        }
+    }
+
+    #[test]
+    fn mask_serial_only_touches_sn_and_respects_bounds() {
+        let mut b = reply(&[0x01, 0x01, 0x04, 0x1F, 0x03, b'1', b'2', b'3', 0x20, 0x01, b'7']);
+        b.extend(b"\x1F\x02ZZ"); // past declared length: untouched
+        mask_serial(&mut b);
+        let r = parse(&b).unwrap();
+        assert_eq!(r.get(id::SN), Some(&b"XXX"[..]));
+        assert_eq!(r.get(0x20), Some(&b"7"[..]));
+        assert!(b.ends_with(b"\x1F\x02ZZ"));
+        // Truncated serial: mask what is there.
+        let mut t = reply(&[0x1F, 0x0A, b'S', b'N']);
+        let len = t.len();
+        t[10] = 0x0C; // declare more than present
+        mask_serial(&mut t);
+        assert_eq!(&t[len - 2..], b"XX");
+        // No header / no SN: unchanged.
+        let mut g = b"no header here".to_vec();
+        mask_serial(&mut g);
+        assert_eq!(g, b"no header here");
+    }
+}

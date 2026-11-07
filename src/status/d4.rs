@@ -517,3 +517,197 @@ mod tests {
         assert_eq!(credit(2, 1), [0, 0, 0, 0x0B, 1, 0, 3, 2, 2, 0, 1]);
     }
 }
+
+#[cfg(test)]
+mod session_tests {
+    use super::mock::MockPrinter;
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const ENTER_OK: [u8; 8] = [0, 0, 0, 8, 1, 0, 0xC5, 0];
+    const INIT_OK: [u8; 9] = [0, 0, 0, 9, 1, 0, 0x80, 0, 0x10];
+
+    fn quick(script: Vec<(Vec<u8>, Vec<u8>)>) -> Session<MockPrinter> {
+        let mut s = Session::new(MockPrinter::new(script));
+        s.timeout = Duration::from_millis(30);
+        s
+    }
+
+    #[test]
+    fn frame_length_fields_match_sizes() {
+        let frames: Vec<Vec<u8>> = vec![
+            ENTER.to_vec(),
+            INIT.to_vec(),
+            EXIT.to_vec(),
+            open_channel(2).to_vec(),
+            credit_request(2).to_vec(),
+            credit(2, 0x1234).to_vec(),
+            close_channel(2).to_vec(),
+            data_packet(2, &STATUS_PAYLOAD),
+        ];
+        for f in frames {
+            assert_eq!(usize::from(u16::from_be_bytes([f[2], f[3]])), f.len(), "{f:02X?}");
+        }
+        assert_eq!(credit(2, 0x1234)[9..], [0x12, 0x34]);
+        assert_eq!(open_channel(5)[7..9], [5, 5]);
+        assert_eq!(close_channel(5)[6..9], [0x02, 5, 5]);
+    }
+
+    #[test]
+    fn packet_accessors() {
+        let p = Packet { psid: 0, raw: vec![0, 0, 0, 8, 1, 0, 0xC5, 0] };
+        assert_eq!((p.cmd(), p.result()), (Some(0xC5), Some(0)));
+        let d = Packet { psid: 2, raw: vec![2, 2, 0, 7, 0, 1, b'x'] };
+        assert_eq!((d.cmd(), d.result(), d.payload()), (None, None, &b"x"[..]));
+        let short = Packet { psid: 0, raw: vec![0, 0, 0, 6, 1, 0] };
+        assert_eq!((short.cmd(), short.result()), (None, None));
+    }
+
+    #[test]
+    fn enter_resyncs_past_junk_bytes() {
+        let mut reply = vec![0, 0, 0, 0, 0];
+        reply.extend(ENTER_OK);
+        let mut s = quick(vec![(ENTER.to_vec(), reply), (EXIT.to_vec(), vec![0, 0, 0, 8, 1, 0, 0x88, 0])]);
+        s.enter().unwrap();
+        s.exit().unwrap();
+        assert_eq!(s.port.writes, vec![ENTER.to_vec(), EXIT.to_vec()]);
+    }
+
+    #[test]
+    fn enter_retries_once_then_succeeds() {
+        let mut s = quick(vec![(ENTER.to_vec(), vec![]), (ENTER.to_vec(), ENTER_OK.to_vec())]);
+        s.enter().unwrap();
+        assert_eq!(s.port.writes, vec![ENTER.to_vec(), ENTER.to_vec()]);
+    }
+
+    #[test]
+    fn enter_refused_sends_no_exit() {
+        let mut s = quick(vec![(ENTER.to_vec(), vec![0, 0, 0, 8, 1, 0, 0xC5, 1])]);
+        assert!(s.query().is_err());
+        assert_eq!(s.port.writes, vec![ENTER.to_vec()]);
+    }
+
+    #[test]
+    fn error_packet_after_enter_still_exits() {
+        let mut s = quick(vec![
+            (ENTER.to_vec(), ENTER_OK.to_vec()),
+            (INIT.to_vec(), vec![0, 0, 0, 0x0A, 1, 0, 0x7F, 0, 0, 0]),
+        ]);
+        let e = s.query().unwrap_err();
+        assert!(e.to_string().contains("error packet"), "{e}");
+        assert_eq!(s.port.writes.last().unwrap(), &EXIT.to_vec());
+    }
+
+    #[test]
+    fn init_refused_is_error() {
+        let mut s = quick(vec![(INIT.to_vec(), vec![0, 0, 0, 9, 1, 0, 0x80, 1, 0x10])]);
+        s.entered = true;
+        assert!(s.init().is_err());
+    }
+
+    #[test]
+    fn open_accepts_result_6_and_close_sends_frame() {
+        let mut s = quick(vec![
+            (open_channel(2).to_vec(), vec![0, 0, 0, 0x10, 1, 0, 0x81, 6, 2, 2, 0, 0x40, 2, 0, 0, 0]),
+            (close_channel(2).to_vec(), vec![0, 0, 0, 0x0A, 1, 0, 0x82, 0, 2, 2]),
+        ]);
+        s.open().unwrap();
+        s.close().unwrap();
+        // Second close is a no-op.
+        s.close().unwrap();
+        assert_eq!(s.port.writes, vec![open_channel(2).to_vec(), close_channel(2).to_vec()]);
+    }
+
+    #[test]
+    fn unsolicited_credit_request_is_answered() {
+        let mut reply = vec![0, 0, 0, 0x0D, 1, 0, 0x04, 2, 2, 0, 5, 0xFF, 0xFF];
+        reply.extend(INIT_OK);
+        let mut s = quick(vec![(INIT.to_vec(), reply)]);
+        s.init().unwrap();
+        assert_eq!(s.port.writes[1], vec![0, 0, 0, 0x0C, 1, 0, 0x84, 0, 2, 2, 0, 5]);
+    }
+
+    #[test]
+    fn unsolicited_credit_grant_skips_credit_request() {
+        let mut reply = vec![0, 0, 0, 0x0B, 1, 0, 0x03, 2, 2, 0, 1];
+        reply.extend([0, 0, 0, 0x10, 1, 0, 0x81, 0, 2, 2, 0, 0x40, 2, 0, 0, 0]);
+        // A complete ST2 reply in one data packet ends the status read.
+        let st2 = super::super::st2::tests::sample(0x04, &[]);
+        let mut cr = vec![0, 0, 0, 0x0A, 1, 0, 0x83, 0, 2, 2];
+        cr.extend(data_packet(2, &st2));
+        let mut s = quick(vec![(open_channel(2).to_vec(), reply), (credit(2, 1).to_vec(), cr)]);
+        s.open().unwrap();
+        assert_eq!(s.tx_credit, 1);
+        assert_eq!(s.status().unwrap(), st2);
+        assert!(!s.port.writes.contains(&credit_request(2).to_vec()));
+        assert!(s.port.writes.contains(&vec![0, 0, 0, 0x0A, 1, 0, 0x83, 0, 2, 2]));
+    }
+
+    #[test]
+    fn printer_exit_suppresses_host_exit() {
+        let mut s = quick(vec![
+            (ENTER.to_vec(), ENTER_OK.to_vec()),
+            (INIT.to_vec(), vec![0, 0, 0, 7, 1, 0, 0x08]),
+        ]);
+        assert!(s.query().is_err());
+        assert!(s.port.writes.contains(&vec![0, 0, 0, 8, 1, 0, 0x88, 0]));
+        assert!(!s.port.writes.contains(&EXIT.to_vec()));
+    }
+
+    #[test]
+    fn credit_request_zero_forever_fails() {
+        let zero = vec![0, 0, 0, 0x0C, 1, 0, 0x84, 0, 2, 2, 0, 0];
+        let mut s = quick((0..10).map(|_| (credit_request(2).to_vec(), zero.clone())).collect());
+        s.timeout = Duration::from_millis(5);
+        let e = s.status().unwrap_err();
+        assert!(e.to_string().contains("no credit"), "{e}");
+        assert_eq!(s.port.writes.len(), 10);
+    }
+
+    #[test]
+    fn status_without_data_is_error() {
+        let mut s = quick(vec![(credit(2, 1).to_vec(), vec![0, 0, 0, 0x0A, 1, 0, 0x83, 0, 2, 2])]);
+        s.tx_credit = 1;
+        assert!(s.status().is_err());
+        assert_eq!(s.port.writes[0], data_packet(2, &STATUS_PAYLOAD));
+    }
+
+    #[test]
+    fn exit_without_reply_is_ok() {
+        let mut s = quick(vec![]);
+        s.entered = true;
+        s.exit().unwrap();
+        assert_eq!(s.port.writes, vec![EXIT.to_vec()]);
+    }
+
+    struct Shared(Rc<RefCell<MockPrinter>>);
+    impl Port for Shared {
+        fn write_all(&mut self, d: &[u8]) -> io::Result<()> {
+            self.0.borrow_mut().write_all(d)
+        }
+        fn read_some(&mut self, b: &mut [u8], t: Duration) -> io::Result<usize> {
+            self.0.borrow_mut().read_some(b, t)
+        }
+    }
+
+    #[test]
+    fn drop_closes_and_exits_open_session() {
+        let m = Rc::new(RefCell::new(MockPrinter::new(vec![
+            (ENTER.to_vec(), ENTER_OK.to_vec()),
+            (INIT.to_vec(), INIT_OK.to_vec()),
+            (open_channel(2).to_vec(), vec![0, 0, 0, 0x10, 1, 0, 0x81, 0, 2, 2, 0, 0x40, 2, 0, 0, 0]),
+            (close_channel(2).to_vec(), vec![0, 0, 0, 0x0A, 1, 0, 0x82, 0, 2, 2]),
+            (EXIT.to_vec(), vec![0, 0, 0, 8, 1, 0, 0x88, 0]),
+        ])));
+        {
+            let mut s = Session::new(Shared(m.clone()));
+            s.timeout = Duration::from_millis(30);
+            s.enter().unwrap();
+            s.init().unwrap();
+            s.open().unwrap();
+        }
+        let w = &m.borrow().writes;
+        assert_eq!(w[w.len() - 2..], [close_channel(2).to_vec(), EXIT.to_vec()]);
+    }
+}
