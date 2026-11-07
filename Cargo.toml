@@ -3,7 +3,6 @@ name = "epson-l800-utility"
 version = "0.1.0"
 edition = "2024"
 description = "Linux maintenance utility for the Epson L800, laid out like the Windows driver's Maintenance tab"
-license = "MIT"
 publish = false
 
 [dependencies]
