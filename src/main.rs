@@ -172,6 +172,7 @@ struct App {
     monitor: StatusMonitorDialog,
     info: TextDialog,
     dump: TextDialog,
+    current_settings: CurrentSettingsDialog,
     /// The last pre-check got a status reply (Windows +0x51C / +0x6C).
     have_status: Cell<bool>,
     progress_state: RefCell<Progress>,
@@ -242,6 +243,7 @@ impl App {
         p.set_collate(v.collate);
         p.set_rotate180(v.rotate180);
         p.set_mirror(v.mirror);
+        self.refresh_current_settings();
     }
 
     fn prefs(&self) -> Values {
@@ -273,6 +275,44 @@ impl App {
             mirror: p.get_mirror(),
         }
         .constrained()
+    }
+
+    /// The Current Settings window (dialog 4050): labels are strings 4053-4079.
+    fn refresh_current_settings(&self) {
+        use settings::*;
+        let v = self.prefs();
+        let on_off = |b: bool| if b { "On" } else { "Off" }.to_string();
+        let lines = [
+            ("Paper Source", SOURCES[v.source].label.to_string()),
+            ("Paper Type", MEDIA[v.media].label.to_string()),
+            ("Quality", ["Draft", "Text", "Text & Image", "Photo", "Best Photo"][v.quality].to_string()),
+            ("Document Size", SIZES[v.size].label.to_string()),
+            ("Borderless", on_off(v.borderless)),
+            ("Orientation", if v.landscape { "Landscape" } else { "Portrait" }.to_string()),
+            ("Reverse Order", on_off(v.reverse)),
+            ("Grayscale", on_off(v.grayscale)),
+            ("Color Management", "Color Controls".to_string()),
+            ("Color Mode", COLOR_MODES[v.color_mode].label.to_string()),
+            (
+                "Page Layout",
+                match (v.multi_page, v.poster) {
+                    (false, _) => "Off".to_string(),
+                    (true, false) => format!("Pages per Sheet {}", PAGES_PER_SHEET[v.pages_index]),
+                    (true, true) => format!("Poster Printing {}", POSTERS[v.poster_index].1),
+                },
+            ),
+            (
+                "Scale ratio",
+                match (v.reduce, v.by_percent) {
+                    (false, _) => "Off".to_string(),
+                    (true, true) => format!("{} %", v.scale),
+                    (true, false) => output_sizes()[v.output_size].label.to_string(),
+                },
+            ),
+        ];
+        let lines: Vec<SettingLine> =
+            lines.into_iter().map(|(label, value)| SettingLine { label: label.into(), value: value.into() }).collect();
+        self.current_settings.set_lines(slint::VecModel::from_slice(&lines));
     }
 
     /// Save for this user with `lpoptions -p <queue> -o ...` (~/.cups/lpoptions).
@@ -597,16 +637,7 @@ impl App {
                 let (title, text) = status::message(&s);
                 self.monitor.set_title_text(title.into());
                 self.monitor.set_body(text.into());
-                let inks: Vec<InkLevel> = s
-                    .inks
-                    .iter()
-                    .map(|i| InkLevel {
-                        name: status::ink_name(i.color).into(),
-                        color: ink_color(i.color),
-                        level: i.percent().map_or(-1, i32::from),
-                    })
-                    .collect();
-                self.monitor.set_inks(slint::VecModel::from_slice(&inks));
+                self.monitor.set_inks(slint::VecModel::from_slice(&ink_levels(&s)));
             }
             // CUPS has jobs: keep the last reading, say it is printing.
             Err(QueryError::Busy) => {
@@ -642,6 +673,18 @@ impl App {
             app.open(&app.info);
         });
     }
+}
+
+/// The ink meters for one status reply, in printer order.
+fn ink_levels(s: &Status) -> Vec<InkLevel> {
+    s.inks
+        .iter()
+        .map(|i| InkLevel {
+            name: status::ink_name(i.color).into(),
+            color: ink_color(i.color),
+            level: i.percent().map_or(-1, i32::from),
+        })
+        .collect()
 }
 
 /// Bar colour for each ink (colour code from field 0x0F).
@@ -753,6 +796,7 @@ fn main() -> Result<(), slint::PlatformError> {
         monitor: StatusMonitorDialog::new()?,
         info: TextDialog::new()?,
         dump: TextDialog::new()?,
+        current_settings: CurrentSettingsDialog::new()?,
         have_status: Cell::new(false),
         progress_state: RefCell::new(Progress::default()),
         poll_timer: Timer::default(),
@@ -769,6 +813,15 @@ fn main() -> Result<(), slint::PlatformError> {
     bg(move || settings::load(&queue), |app, res| match res {
         Ok(v) => app.set_prefs(&v),
         Err(e) => eprintln!("epson-l800-utility: cannot read the printing preferences: {e}"),
+    });
+    // The Ink Levels boxes on Main and Shortcuts: one status query when the
+    // sheet opens (same rules as always: none while CUPS has jobs, Exit is
+    // always sent). Without a reply they stay empty, like Windows.
+    let queue = app.queue.clone();
+    bg(move || status::query(&queue), |app, res| {
+        if let Ok(s) = res {
+            app.main.global::<Prefs>().set_inks(slint::VecModel::from_slice(&ink_levels(&s)));
+        }
     });
     app.dump.set_monospace(true);
     wire(&app);
@@ -815,6 +868,23 @@ fn wire(ui: &App) {
         slint::CloseRequestResponse::HideWindow
     });
     let prefs = ui.main.global::<Prefs>();
+    // Show Settings / Hide Settings toggles the Current Settings window.
+    prefs.on_edited(on(|a| a.refresh_current_settings()));
+    prefs.on_toggle_settings(on(|a| {
+        let shown = a.current_settings.window().is_visible();
+        let _ = if shown { a.current_settings.hide() } else { a.current_settings.show() };
+        a.main.global::<Prefs>().set_settings_shown(!shown);
+    }));
+    ui.current_settings.on_dismiss(on(|a| {
+        let _ = a.current_settings.hide();
+        a.main.global::<Prefs>().set_settings_shown(false);
+    }));
+    ui.current_settings.window().on_close_requested(|| {
+        if let Some(a) = app() {
+            a.main.global::<Prefs>().set_settings_shown(false);
+        }
+        slint::CloseRequestResponse::HideWindow
+    });
     prefs.on_reset_defaults(on(|a| {
         a.set_prefs(&Values::default());
         a.main.global::<Prefs>().set_dirty(true);

@@ -8,7 +8,7 @@
 // Overlapping model-dependent controls whose L800 visibility is not settled
 // yet are left out (see README).
 
-import { Strings, DlgText, EtchedLine, DlgButton, Group, CheckBox, Radio, Combo, Spin, NumberSpin, List } from "common.slint";
+import { Strings, DlgText, EtchedLine, DlgButton, Group, CheckBox, Radio, Combo, Spin, NumberSpin, List, InkLevel, InkMeter } from "common.slint";
 import { Slider } from "std-widgets.slint";
 
 export global Prefs {
@@ -51,6 +51,11 @@ export global Prefs {
     in-out property <int> preset: -1;
     // Something changed since the last load/save (enables Apply).
     in-out property <bool> dirty;
+    // Approximate ink levels from one status query when the sheet opens.
+    in property <[InkLevel]> inks;
+    // The Current Settings window (dialog 4050) is open.
+    in property <bool> settings-shown;
+    callback toggle-settings();
     out property <bool> borderless-allowed:
         root.source-borderless[root.source] && root.media-borderless[root.media] && root.size-borderless[root.size];
     // Index of the first size that needs Reduce/Enlarge (A3, A3+, A2, B4, B3).
@@ -60,6 +65,8 @@ export global Prefs {
     out property <bool> vivid: root.color-mode == 1;
     callback reset-defaults();
     callback preset-picked(int);
+    // Any edit (Rust refreshes the Current Settings window).
+    callback edited();
 
     // After every edit: mark dirty and apply the PPD constraints the way the
     // Windows driver greys things out (SETTINGS.md §1).
@@ -78,6 +85,7 @@ export global Prefs {
             // Gamma 1.8 is not allowed with EPSON Vivid.
             root.gamma = 1;
         }
+        root.edited();
     }
 }
 
@@ -95,22 +103,31 @@ component QualityIcon inherits Rectangle {
     }
 }
 
-// Ink Levels group box: owner-draw meters, 23x54 px each. The L800 has six
-// tanks; Windows fills them from Status Monitor 3. We point there instead.
+// Ink Levels group box: owner-draw meters, 23x54 px each, 25.5 px apart.
+// Like Windows, they show the approximate levels from the printer status and
+// stay empty when there is no status.
 component InkBox inherits Group {
     in property <length> meter-x;
     in property <length> meter-y;
-    title: "Ink Levels";
-    for i in 6: Rectangle {
+    title: "Approximate Ink Levels";
+    for ink[i] in Prefs.inks: InkMeter {
         x: root.meter-x + i * 25.5px;
         y: root.meter-y;
         width: 23px;
         height: 54px;
-        background: #ffffff;
-        border-width: 1px;
-        border-color: #c0c0c0;
+        ink: ink;
     }
-    Tooltip { text: @markdown("Open EPSON Status Monitor 3 on the Maintenance tab for the approximate ink levels."); }
+}
+
+// "Show Settings" / "Hide Settings" (strings 2050/2051): toggles the Current
+// Settings window (dialog 4050).
+component ShowSettingsButton inherits DlgButton {
+    x: 354px;
+    y: 403px;
+    width: 80px;
+    height: 23px;
+    text: Prefs.settings-shown ? "Hide Settings" : "Show Settings";
+    clicked => { Prefs.toggle-settings(); }
 }
 
 // Dialog 904 "Shortcuts".
@@ -127,13 +144,14 @@ export component ShortcutsPage inherits Rectangle {
         selected => { Prefs.preset-picked(self.current-index); }
     }
     DlgButton { x: 131px; y: 325px; width: 80px; height: 23px; text: "Reset"; enabled: false; tip: Strings.windows-only; }
-    CheckBox { x: 14px; y: 364px; width: 204px; height: 29px; text: "Do not display mouse-over messages for Printing Presets."; enabled: false; tip: Strings.windows-only; }
+    CheckBox { x: 14px; y: 364px; width: 204px; height: 29px; text: "Do not display mouse-over messages for Printing Presets."; multiline: true; enabled: false; tip: Strings.windows-only; }
     DlgButton { x: 20px; y: 403px; width: 105px; height: 23px; text: "Add/Remove..."; enabled: false; tip: Strings.windows-only; }
+    // 5253 (215,237,222x112); How to Buy (5262) hidden, as on Main.
     InkBox { x: 215px; y: 237px; width: 222px; height: 112px; meter-x: 7px; meter-y: 20px; }
-    DlgButton { x: 246px; y: 319px; width: 159px; height: 23px; text: "How to Buy"; enabled: false; tip: Strings.windows-only; }
     CheckBox { x: 300px; y: 364px; width: 92px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
     CheckBox { x: 300px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
     DlgButton { x: 131px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
+    ShowSettingsButton { }
 }
 
 // Dialog 900 "Main".
@@ -183,7 +201,10 @@ export component MainPage inherits Rectangle {
     CheckBox { x: 294px; y: 179px; width: 92px; height: 13px; text: "Reverse Order"; checked <=> Prefs.reverse; toggled => { Prefs.changed(); } }
     CheckBox { x: 294px; y: 198px; width: 92px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
     EtchedLine { x: 288px; y: 239px; width: 137px; }
+    // 1997: the L800 capability bits show it (SETTINGS.md §4); the PPD has no quiet mode.
+    CheckBox { x: 294px; y: 245px; width: 105px; height: 13px; text: "Quiet Mode"; enabled: false; tip: "No Linux option: the L800 CUPS driver has no quiet mode."; }
 
+    // 1977 (14,275,222x98), retitled to string 2082 at run time.
     InkBox { x: 14px; y: 275px; width: 222px; height: 98px; meter-x: 9px; meter-y: 21px; }
 
     Group { x: 245px; y: 275px; width: 189px; height: 98px; title: "Orientation"; }
@@ -194,6 +215,7 @@ export component MainPage inherits Rectangle {
     CheckBox { x: 300px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
     DlgButton { x: 14px; y: 403px; width: 110px; height: 23px; text: "Reset Defaults"; clicked => { Prefs.reset-defaults(); } }
     DlgButton { x: 131px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
+    ShowSettingsButton { }
 }
 
 // Dialog 901 "Advanced". The four combos of "Paper & Quality Options" are
@@ -249,6 +271,54 @@ export component AdvancedPage inherits Rectangle {
     DlgButton { x: 131px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
 }
 
+// Page Layout preview (owner-draw 3414): one sheet with the pages on it.
+component LayoutPreview inherits Rectangle {
+    property <int> cols: !Prefs.multi-page ? 1 : Prefs.poster ? [2, 2, 3, 4][Prefs.poster-index] : Prefs.pages-index == 0 ? 1 : 2;
+    property <int> rows: !Prefs.multi-page ? 1 : Prefs.poster ? [1, 2, 3, 4][Prefs.poster-index] : 2;
+    property <length> pw: Prefs.landscape ? 62px : 46px;
+    property <length> ph: Prefs.landscape ? 46px : 62px;
+    Rectangle {
+        x: (parent.width - root.pw) / 2;
+        y: (parent.height - root.ph) / 2;
+        width: root.pw;
+        height: root.ph;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #7a7a7a;
+        for i in root.cols * root.rows: Rectangle {
+            x: 3px + Math.mod(i, root.cols) * (parent.width - 6px) / root.cols;
+            y: 3px + Math.floor(i / root.cols) * (parent.height - 6px) / root.rows;
+            width: (parent.width - 6px) / root.cols - 2px;
+            height: (parent.height - 6px) / root.rows - 2px;
+            background: Prefs.poster ? #dceefa : #f4f4f4;
+            border-width: 1px;
+            border-color: Prefs.poster ? #7fb5d9 : (Prefs.multi-page && Prefs.page-borders ? #303030 : #c8c8c8);
+            if !Prefs.poster: Text {
+                text: i + 1;
+                font-size: 9px;
+                color: #3a7bd5;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// Collate picture (owner-draw 3431): two copies of a 3-page document.
+component CollatePicture inherits Rectangle {
+    property <[int]> order: Prefs.collate ? (Prefs.reverse ? [3, 2, 1, 3, 2, 1] : [1, 2, 3, 1, 2, 3]) : (Prefs.reverse ? [3, 3, 2, 2, 1, 1] : [1, 1, 2, 2, 3, 3]);
+    for n[i] in root.order: Rectangle {
+        x: 4px + i * 13px;
+        y: 8px + Math.mod(i, 3) * 3px;
+        width: 14px;
+        height: 20px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #7a7a7a;
+        Text { text: n; font-size: 9px; color: #3a7bd5; horizontal-alignment: center; vertical-alignment: center; }
+    }
+}
+
 // Dialog 902 "Page Layout".
 export component PageLayoutPage inherits Rectangle {
     width: 443px;
@@ -292,6 +362,9 @@ export component PageLayoutPage inherits Rectangle {
     if !Prefs.poster: CheckBox { x: 20px; y: 249px; width: 110px; height: 13px; text: "Print Page Borders"; enabled: Prefs.multi-page; checked <=> Prefs.page-borders; toggled => { Prefs.changed(); } }
     DlgButton { x: 135px; y: 258px; width: 78px; height: 23px; text: Prefs.poster ? "Settings..." : "Page Order..."; enabled: false; tip: Strings.no-linux; }
 
+    // 3414 (141,172,69x75): our own preview of the sheet layout.
+    LayoutPreview { x: 141px; y: 172px; width: 69px; height: 75px; }
+
     Group { x: 8px; y: 319px; width: 210px; height: 104px; title: "Watermark"; }
     // The PPD's watermark data paths (*epcgWatermarkData) point at
     // /home/epson/projects/..., which does not exist, so the filter cannot
@@ -311,6 +384,8 @@ export component PageLayoutPage inherits Rectangle {
     NumberSpin { x: 324px; y: 140px; width: 61px; height: 20px; minimum: 1; maximum: 99; value <=> Prefs.copies; changed => { Prefs.changed(); } }
     CheckBox { x: 234px; y: 167px; width: 89px; height: 13px; text: "Reverse Order"; checked <=> Prefs.reverse; toggled => { Prefs.changed(); } }
     CheckBox { x: 234px; y: 192px; width: 87px; height: 13px; text: "Collate"; checked <=> Prefs.collate; toggled => { Prefs.changed(); } }
+    // 3431 (341,169,86x42): our own collate picture.
+    CollatePicture { x: 341px; y: 169px; width: 86px; height: 42px; }
 
     Group { x: 225px; y: 223px; width: 210px; height: 135px; title: "Borderless"; }
     DlgText { x: 240px; y: 244px; width: 131px; height: 13px; text: "Enlargement Method"; wrap: no-wrap; color: #8a8a8a; }

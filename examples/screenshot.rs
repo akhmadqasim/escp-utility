@@ -88,10 +88,49 @@ fn main() {
     main.set_version_text(env!("CARGO_PKG_VERSION").into());
     main.set_dry_run(true);
     fill_lists(&main.global::<Prefs>());
+    // Ink levels of the live L800 reply in src/status/l800_st2_live_masked.hex.
+    let inks: Vec<InkLevel> = [("Cyan", 0x00a0e0, 47), ("Magenta", 0xd0168c, 37), ("Light Magenta", 0xf08cc8, 18), ("Light Cyan", 0x7fd0f0, 3), ("Black", 0x202020, 81), ("Yellow", 0xf0c800, 27)]
+        .iter()
+        .map(|&(n, c, l)| InkLevel { name: n.into(), color: slint::Color::from_argb_encoded(0xff00_0000 | c), level: l })
+        .collect();
+    main.global::<Prefs>().set_inks(slint::VecModel::from_slice(&inks));
     for (tab, name) in [(0, "sheet-904-shortcuts"), (1, "sheet-900-main"), (2, "sheet-901-advanced"), (3, "sheet-902-page-layout"), (4, "main")] {
         main.set_current_tab(tab);
         render(&p, name, (459, 505), || main.show(), &out);
     }
+    // Page Layout with Multi-Page (4 per sheet), borders and collate on.
+    let prefs = main.global::<Prefs>();
+    prefs.set_multi_page(true);
+    prefs.set_pages_index(1);
+    prefs.set_page_borders(true);
+    prefs.set_collate(true);
+    prefs.set_reduce(true);
+    main.set_current_tab(3);
+    render(&p, "sheet-902-page-layout-multi", (459, 505), || main.show(), &out);
+    prefs.set_multi_page(false);
+    prefs.set_collate(false);
+    prefs.set_reduce(false);
+
+    let d = CurrentSettingsDialog::new().unwrap();
+    let lines: Vec<SettingLine> = [
+        ("Paper Source", "Sheet"),
+        ("Paper Type", "plain papers"),
+        ("Quality", "Text"),
+        ("Document Size", "A4 210 x 297 mm"),
+        ("Borderless", "Off"),
+        ("Orientation", "Portrait"),
+        ("Reverse Order", "Off"),
+        ("Grayscale", "Off"),
+        ("Color Management", "Color Controls"),
+        ("Color Mode", "EPSON Vivid"),
+        ("Page Layout", "Off"),
+        ("Scale ratio", "Off"),
+    ]
+    .iter()
+    .map(|&(l, v)| SettingLine { label: l.into(), value: v.into() })
+    .collect();
+    d.set_lines(slint::VecModel::from_slice(&lines));
+    render(&p, "current-settings-4050", (213, 496), || d.show(), &out);
 
     let d = NozzleCheckDialog::new().unwrap();
     d.set_body("Before you print the nozzle check pattern, make sure the printer is switched on and connected to this computer.\n\nTake out the CD/DVD tray and set the front tray to the paper position; otherwise the nozzle check cannot run. Load A4 or Letter plain paper in the sheet feeder.\n\nClick [Print] to print the pattern, or [Cancel] to close.".into());

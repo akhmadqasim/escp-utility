@@ -37,7 +37,14 @@ order: **Shortcuts** (904), **Main** (900), **Advanced** (901), **Page Layout**
 (902) and **Maintenance** (903). Each tab has our own 16x16 icon. Every page is
 443x434 px, laid out at the rectangles in LAYOUT.json. The sheet buttons are
 **OK** (save and close), **Cancel** (discard) and **Apply** (save; enabled only
-after a change). Help is left out because there is no help file.
+after a change). **Help** is there but disabled, because there is no help file.
+**Show Settings** (Main and Shortcuts) opens the Current Settings summary
+(dialog 4050). The Approximate Ink Levels boxes on Main and Shortcuts are filled
+by one status query when the window opens. That query follows the usual rules:
+none while CUPS has jobs, and Exit is always sent. Without a reply the boxes
+stay empty, like Windows. Text uses Liberation Sans at 10.75 px, which matches
+Tahoma 8 pt widths and line breaks. Check box, radio and button labels stay on
+one line.
 
 The app opens on Main. `--utility` opens it on Maintenance, which is what
 Windows does for its utility launch code (EPUT). The desktop entry uses
@@ -84,11 +91,13 @@ out (PPD UIConstraints, SETTINGS.md §1):
 
 **Disabled, with a tooltip saying why:**
 - No Linux equivalent: PhotoEnhance, Fix Red-Eye, Edge Smoothing, High Speed,
+  Quiet Mode (Main; the L800 capability bits show it),
   the PhotoEnhance and ICM colour-management modes, 2-sided printing with
   Margins and Folded Booklet, Page Order, Poster settings, and the borderless
   Enlargement Method and Expansion.
-- Windows-only: Print Preview, Show this screen first, Technical Support, How
-  to Buy, Save Settings / custom settings, preset Add/Remove/Reset.
+- Windows-only: Print Preview, Show this screen first, Technical Support, Save
+  Settings / custom settings, preset Add/Remove/Reset. How to Buy is hidden, as
+  on Windows without an ink order URL.
 - **Watermark** is shown but off. The installed PPD's watermark data paths
   point at `/home/epson/projects/...`, which does not exist, so the filter could
   not draw them.
@@ -98,10 +107,9 @@ out (PPD UIConstraints, SETTINGS.md §1):
   position options.
 
 **Not settled yet:** some Windows templates stack several model-dependent
-controls on the same spot, for example Black Ink Only / Grayscale, Quiet Mode /
-Fast Mode, and the Ink Levels box with or without How to Buy. Those are left
-out until their L800 visibility is confirmed (phase2/rea/SETTINGS-visibility.md).
-The Ink Levels boxes are drawn empty; their tooltip points to Status Monitor 3.
+controls on the same spot, for example Black Ink Only / Grayscale and the
+Advanced tab's Quiet/Fast Mode. Those are left out until their L800 visibility
+is confirmed (phase2/rea/SETTINGS-visibility.md).
 On Advanced, the four "Paper & Quality Options" combos are read in template
 order as Source, Type, Quality, Size (M).
 

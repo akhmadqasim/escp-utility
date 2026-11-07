@@ -16,7 +16,7 @@
 
 import { Button, ComboBox, Palette, TextEdit } from "std-widgets.slint";
 
-import { Strings, DlgText, EtchedLine, DlgButton, IconButton, RadioButton, DlgIcon, UtilityWindow, InkLevel, InkMeter } from "common.slint";
+import { Strings, DlgText, EtchedLine, DlgButton, IconButton, RadioButton, DlgIcon, UtilityWindow, InkLevel, InkMeter, CheckBox } from "common.slint";
 import { Prefs, ShortcutsPage, MainPage, AdvancedPage, PageLayoutPage } from "pages.slint";
 export { InkLevel, Prefs }
 
@@ -171,7 +171,7 @@ component SheetTab inherits Rectangle {
 // Main (900), Advanced (901), Page Layout (902), Maintenance (903). Sheet
 // buttons come from the comctl32 template: 75x23 px, 6 px apart, right-aligned;
 // tab control at (6,7). The tab strip height and insets depend on the Windows
-// theme, so the frame is approximate. Help is left out (no help file here).
+// theme, so the frame is approximate. Help is disabled (no help file here).
 export component MainWindow inherits Window {
     in property <string> queue: "L800";
     in property <bool> dry-run;
@@ -192,7 +192,7 @@ export component MainWindow inherits Window {
     title: root.queue + " Printing Preferences" + (root.dry-run ? "  (dry run: nothing is sent or saved)" : "");
     width: 6px + root.inset + 443px + root.inset + 6px;
     height: root.page-y + root.inset + 434px + root.inset + 7px + 23px + 7px;
-    default-font-size: 11px;
+    default-font-size: 10.75px;
     default-font-family: "Liberation Sans";
     background: #f0f0f0;
     init => { Palette.color-scheme = ColorScheme.light; }
@@ -248,12 +248,49 @@ export component MainWindow inherits Window {
     }
 
     property <length> btn-y: root.height - 7px - 23px;
-    DlgButton { x: root.width - 6px - 3 * 75px - 2 * 6px; y: root.btn-y; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
-    DlgButton { x: root.width - 6px - 2 * 75px - 6px; y: root.btn-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
-    DlgButton { x: root.width - 6px - 75px; y: root.btn-y; width: 75px; height: 23px; text: "Apply"; enabled: Prefs.dirty; clicked => { root.apply(); } }
+    DlgButton { x: root.width - 6px - 4 * 75px - 3 * 6px; y: root.btn-y; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
+    DlgButton { x: root.width - 6px - 3 * 75px - 2 * 6px; y: root.btn-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: root.width - 6px - 2 * 75px - 6px; y: root.btn-y; width: 75px; height: 23px; text: "Apply"; enabled: Prefs.dirty; clicked => { root.apply(); } }
+    // Windows shows Help when the driver's help file is present (PSP_HASHELP).
+    DlgButton { x: root.width - 6px - 75px; y: root.btn-y; width: 75px; height: 23px; text: "Help"; enabled: false; tip: "No help file on Linux."; }
 
     // Swallow clicks while a utility dialog is open.
     if root.busy: TouchArea { width: 100%; height: 100%; }
+}
+
+export struct SettingLine {
+    label: string,
+    value: string,
+}
+
+// Dialog 4050 "Current Settings" (142x305 DLU = 213x496 px), opened by
+// Show Settings: a summary of the settings (labels: strings 4053-4079, filled
+// from Rust), the "Always show current settings." box and Close.
+export component CurrentSettingsDialog inherits UtilityWindow {
+    in property <[SettingLine]> lines;
+    callback dismiss();
+    title: "Current Settings";
+    width: 213px;
+    height: 496px;
+    default-action => { root.dismiss(); }
+    cancel-action => { root.dismiss(); }
+    // 4051 BLACKFRAME (1,1,140x273 DLU)
+    Rectangle {
+        x: 2px; y: 2px; width: 210px; height: 444px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #000000;
+        for l[i] in root.lines: Rectangle {
+            x: 6px;
+            y: 6px + i * 34px;
+            width: parent.width - 12px;
+            height: 32px;
+            DlgText { x: 0; y: 0; width: parent.width; height: 13px; text: l.label; wrap: no-wrap; font-weight: 700; }
+            DlgText { x: 8px; y: 14px; width: parent.width - 8px; height: 13px; text: l.value; wrap: no-wrap; overflow: elide; }
+        }
+    }
+    CheckBox { x: 9px; y: 453px; width: 195px; height: 13px; text: "Always show current settings."; enabled: false; tip: Strings.windows-only; }
+    DlgButton { x: 150px; y: 475px; width: 60px; height: 23px; text: "Close"; clicked => { root.dismiss(); } }
 }
 
 // ---------------------------------------------------------------------------
@@ -544,7 +581,7 @@ export component TextDialog inherits UtilityWindow {
         text: root.content;
         read-only: true;
         wrap: no-wrap;
-        font-size: 11px;
+        font-size: 10.75px;
         font-family: root.monospace ? "DejaVu Sans Mono" : "Liberation Sans";
     }
     DlgButton { x: 399px; y: 470px; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
