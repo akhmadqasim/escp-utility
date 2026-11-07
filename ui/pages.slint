@@ -119,9 +119,9 @@ component QualityIcon inherits Rectangle {
 // Like Windows, they show the approximate levels from the printer status and
 // stay empty when there is no status.
 // Ink box (1977 / 5253): six boxes re-laid-out at run time to 27 px wide,
-// 8 px apart (x = group + 8 + 35n), C, M, LM, LC, K, Y (SETTINGS-visibility.md).
+// 8 px apart (x = group + meter-x + 35n), C, M, LM, LC, K, Y (SETTINGS-visibility.md).
 component InkBox inherits Group {
-    in property <length> meter-x: 8px;
+    in property <length> meter-x;
     in property <length> meter-y;
     title: "Approximate Ink Levels";
     for ink[i] in Prefs.inks: InkMeter {
@@ -142,6 +142,26 @@ component ShowSettingsButton inherits DlgButton {
     height: 23px;
     text: Prefs.settings-shown ? "Hide Settings" : "Show Settings";
     clicked => { Prefs.toggle-settings(); }
+}
+
+// The bottom rows shared by the pages.
+component ShowFirstCheck inherits CheckBox {
+    x: 307px;
+    y: 384px;
+    width: 128px;
+    height: 13px;
+    text: "Show this screen first";
+    enabled: false;
+    tip: Strings.windows-only;
+}
+
+component ResetDefaultsButton inherits DlgButton {
+    x: 8px;
+    y: 403px;
+    width: 110px;
+    height: 23px;
+    text: "Reset Defaults";
+    clicked => { Prefs.reset-defaults(); }
 }
 
 // Tidy layout (README "Printing Preferences"): the Windows controls, labels, sizes and
@@ -170,7 +190,7 @@ export component ShortcutsPage inherits Rectangle {
     // 5253, bottom-aligned with the list; How to Buy (5262) hidden, as on Main.
     InkBox { x: 215px; y: 244px; width: 220px; height: 83px; meter-x: 9px; meter-y: 21px; }
     CheckBox { x: 307px; y: 362px; width: 92px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
-    CheckBox { x: 307px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
+    ShowFirstCheck { }
     DlgButton { x: 8px; y: 403px; width: 105px; height: 23px; text: "Add/Remove..."; enabled: false; tip: Strings.windows-only; }
     DlgButton { x: 119px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
     ShowSettingsButton { }
@@ -241,8 +261,8 @@ export component MainPage inherits Rectangle {
     Radio { x: 277px; y: 307px; width: 78px; height: 13px; text: "Landscape"; checked: Prefs.landscape; picked => { Prefs.landscape = true; Prefs.changed(); } }
     Image { x: 359px; y: 274px; width: 68px; height: 73px; source: Prefs.landscape ? @image-url("icons/orient-landscape.svg") : @image-url("icons/orient-portrait.svg"); }
 
-    CheckBox { x: 307px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
-    DlgButton { x: 8px; y: 403px; width: 110px; height: 23px; text: "Reset Defaults"; clicked => { Prefs.reset-defaults(); } }
+    ShowFirstCheck { }
+    ResetDefaultsButton { }
     DlgButton { x: 124px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
     ShowSettingsButton { }
 }
@@ -300,8 +320,8 @@ export component AdvancedPage inherits Rectangle {
     Combo { x: 297px; y: 128px; width: 130px; model: Prefs.gamma-labels; current-index <=> Prefs.gamma; enabled: !Prefs.vivid; tip: Prefs.vivid ? Strings.gamma-vivid : ""; selected => { Prefs.changed(); } }
     DlgButton { x: 346px; y: 172px; width: 81px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("color-controls"); } }
 
-    CheckBox { x: 307px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
-    DlgButton { x: 8px; y: 403px; width: 110px; height: 23px; text: "Reset Defaults"; clicked => { Prefs.reset-defaults(); } }
+    ShowFirstCheck { }
+    ResetDefaultsButton { }
     DlgButton { x: 124px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
     // Custom settings (3123) and Save Settings... (3124), under Print Options
     // and in the columns of the buttons below them.
