@@ -84,7 +84,7 @@ export component ColorControlsDialog inherits UtilityWindow {
     property <bool> vivid: root.color-mode == 1;
     title: "Color Controls";
     width: 555px;
-    height: 405px;
+    client-height: 405px;
     default-action => { root.ok(); }
     cancel-action => { root.cancel(); }
 
@@ -187,7 +187,7 @@ export component LayoutDialog inherits UtilityWindow {
     callback dismiss();
     title: root.caption;
     width: root.client-w * 1px;
-    height: root.client-h * 1px;
+    client-height: root.client-h * 1px;
     default-action => { root.dismiss(); }
     cancel-action => { root.dismiss(); }
     for c in root.controls: Rectangle {

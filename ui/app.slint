@@ -17,10 +17,10 @@
 
 import { Button, ComboBox, Palette, TextEdit } from "std-widgets.slint";
 
-import { Strings, DlgText, EtchedLine, DlgButton, IconButton, Radio, DlgIcon, UtilityWindow, InkLevel, InkMeter, CheckBox } from "common.slint";
+import { Strings, DlgText, EtchedLine, DlgButton, IconButton, Radio, DlgIcon, FramedWindow, UtilityWindow, InkLevel, InkMeter, CheckBox, Frame } from "common.slint";
 import { Prefs, ShortcutsPage, MainPage, AdvancedPage, PageLayoutPage } from "pages.slint";
 import { ColorControlsDialog, LayoutDialog, LayoutKind, LayoutControl } from "dialogs.slint";
-export { InkLevel, Prefs, ColorControlsDialog, LayoutDialog, LayoutKind, LayoutControl }
+export { InkLevel, Prefs, Frame, ColorControlsDialog, LayoutDialog, LayoutKind, LayoutControl }
 
 export struct UtilityRow {
     id: string,
@@ -174,7 +174,7 @@ component SheetTab inherits Rectangle {
 // buttons come from the comctl32 template: 75x23 px, 6 px apart, right-aligned;
 // tab control at (6,7). The tab strip height and insets depend on the Windows
 // theme, so the frame is approximate. Help is disabled (no help file here).
-export component MainWindow inherits Window {
+export component MainWindow inherits FramedWindow {
     in property <string> queue: "L800";
     in property <bool> dry-run;
     in property <string> version-text;
@@ -192,9 +192,8 @@ export component MainWindow inherits Window {
     property <length> page-y: 7px + root.tab-strip-h;
 
     title: root.queue + " Printing Preferences" + (root.dry-run ? "  (dry run: nothing is sent or saved)" : "");
-    icon: @image-url("icons/app.svg");
     width: 6px + root.inset + 443px + root.inset + 6px;
-    height: root.page-y + root.inset + 434px + root.inset + 7px + 23px + 7px;
+    client-height: root.page-y + root.inset + 434px + root.inset + 7px + 23px + 7px;
     default-font-size: 10.75px;
     default-font-family: "Liberation Sans";
     background: #f0f0f0;
@@ -250,7 +249,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    property <length> btn-y: root.height - 7px - 23px;
+    property <length> btn-y: root.client-height - 7px - 23px;
     DlgButton { x: root.width - 6px - 4 * 75px - 3 * 6px; y: root.btn-y; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
     DlgButton { x: root.width - 6px - 3 * 75px - 2 * 6px; y: root.btn-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
     DlgButton { x: root.width - 6px - 2 * 75px - 6px; y: root.btn-y; width: 75px; height: 23px; text: "Apply"; enabled: Prefs.dirty; clicked => { root.apply(); } }
@@ -283,7 +282,7 @@ export component CurrentSettingsDialog inherits UtilityWindow {
     callback dismiss();
     title: "Current Settings";
     width: 213px;
-    height: 496px;
+    client-height: 496px;
     default-action => { root.dismiss(); }
     cancel-action => { root.dismiss(); }
     // 4051 BLACKFRAME
@@ -323,7 +322,7 @@ export component WaitDialog inherits UtilityWindow {
     in property <image> glyph: @image-url("icons/nozzle-check.svg");
     title: root.utility;
     width: 240px;
-    height: 48px;
+    client-height: 48px;
     DlgIcon { x: 8px; y: 8px; source: root.glyph; }
     DlgText { x: 48px; y: 18px; width: 184px; height: 13px; text: "Please wait..."; wrap: no-wrap; }
 }
@@ -337,7 +336,7 @@ export component NozzleCheckDialog inherits UtilityWindow {
     property <length> buttons-y: t.y + t.height + 16px;
     title: "Nozzle Check";
     width: 420px;
-    height: root.buttons-y + 31px;
+    client-height: root.buttons-y + 31px;
     default-action => { root.print(); }
     cancel-action => { root.cancel(); }
     // 517: picture centred over the dialog.
@@ -358,7 +357,7 @@ export component NozzleResultDialog inherits UtilityWindow {
     property <length> buttons-y: max(196px, t.y + t.height) + 16px;
     title: "Nozzle Check";
     width: 435px;
-    height: root.buttons-y + 31px;
+    client-height: root.buttons-y + 31px;
     default-action => { root.finish(); }
     cancel-action => { root.finish(); }
     // 518/519 (8,y,419x50): the 348x42 samples centred.
@@ -385,7 +384,7 @@ export component HeadCleaningDialog inherits UtilityWindow {
     property <length> buttons-y: root.radio-y + 22px + 16px + 16px;
     title: "Head Cleaning";
     width: 420px;
-    height: root.buttons-y + 31px;
+    client-height: root.buttons-y + 31px;
     default-action => { root.start(root.power); }
     cancel-action => { root.cancel(); }
     DlgIcon { x: 8px; y: 8px; source: @image-url("icons/head-cleaning.svg"); }
@@ -418,7 +417,7 @@ export component PowerCleaningDialog inherits UtilityWindow {
     property <length> buttons-y: root.picture-y + 124px + 16px;
     title: "Head Cleaning";
     width: 435px;
-    height: root.buttons-y + 31px;
+    client-height: root.buttons-y + 31px;
     default-action => { root.ok(); }
     cancel-action => { root.cancel(); }
     DlgIcon { x: 8px; y: 8px; source: @image-url("icons/head-cleaning.svg"); }
@@ -445,7 +444,7 @@ export component CleaningDoneDialog inherits UtilityWindow {
     property <length> buttons-y: t.y + t.height + 16px;
     title: "Head Cleaning";
     width: 420px;
-    height: root.buttons-y + 31px;
+    client-height: root.buttons-y + 31px;
     default-action => { root.nozzle-check(); }
     cancel-action => { root.finish(); }
     DlgIcon { x: 8px; y: 8px; source: @image-url("icons/head-cleaning.svg"); }
@@ -465,7 +464,7 @@ export component PaperGuideDialog inherits UtilityWindow {
     property <length> buttons-y: t.y + t.height + 16px;
     title: "";
     width: 420px;
-    height: root.buttons-y + 31px;
+    client-height: root.buttons-y + 31px;
     default-action => { root.cleaning(); }
     cancel-action => { root.cancel(); }
     DlgIcon { x: 8px; y: 8px; source: @image-url("icons/paper-guide.svg"); }
@@ -488,7 +487,7 @@ export component MessageDialog inherits UtilityWindow {
     property <length> buttons-y: max(40px, root.body == "" ? h.y + h.height : b.y + b.height) + 16px;
     title: root.utility;
     width: 371px;
-    height: root.buttons-y + 31px;
+    client-height: root.buttons-y + 31px;
     default-action => { root.ok(); }
     cancel-action => { root.ok(); }
     DlgIcon { x: 8px; y: 8px; source: root.glyph; }
@@ -548,7 +547,7 @@ export component ProgressDialog inherits UtilityWindow {
     in-out property <int> frame;
     title: "Head Cleaning";
     width: 420px;
-    height: max(120px, t.y + t.height) + 8px;
+    client-height: max(120px, t.y + t.height) + 8px;
     DlgIcon { x: 8px; y: 88px; source: @image-url("icons/head-cleaning.svg"); }
     // 517 (8,8,404x72): 12 frames, 106x64, centred.
     CleaningAnimation { x: 157px; y: 12px; frame: root.frame; }
@@ -589,7 +588,7 @@ export component TextDialog inherits UtilityWindow {
     callback ok();
     title: root.caption;
     width: 485px;
-    height: 505px;
+    client-height: 505px;
     default-action => { root.ok(); }
     cancel-action => { root.ok(); }
     DlgText { x: 11px; y: 11px; width: 463px; height: 39px; text: root.heading; }
@@ -625,7 +624,7 @@ export component StatusMonitorDialog inherits UtilityWindow {
     callback print-queue();
     title: "EPSON Status Monitor 3 : " + root.printer;
     width: 479px;
-    height: 327px;
+    client-height: 327px;
     background: #ffffff;
     default-action => { root.ok(); }
     cancel-action => { root.ok(); }

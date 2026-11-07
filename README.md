@@ -297,11 +297,16 @@ It matches the desktop file's `StartupWMClass` and the icon name.
   `~/.local/share/icons/hicolor/scalable/apps/epson-l800-utility.svg`.
 - Dialogs are created when first opened. On Wayland Slint drops a dialog's window when it
   is hidden, so only open dialogs exist on screen.
-- Every window has a fixed size (equal min/max size hints). GNOME therefore
-  offers no maximize or resize, and does not fullscreen it. If a compositor
-  maximizes or fullscreens a window anyway, the app asks for the normal state
-  back on the resize that follows (winit 0.30 accessor, `fixed_size` in
-  `src/main.rs`).
+- Every window draws its own Windows 10 style frame: a 30 px caption with
+  the title and Close, and a 1 px border; the client areas keep their
+  sizes. GNOME's client-side frame (sctk-adwaita) always shows a maximize
+  button, which winit cannot hide on Wayland, so the windows have no system
+  frame (`no-frame`). Dragging the caption moves the window
+  (`WindowMoveArea`); a double-click does nothing. Close sends the same close
+  request as the system close box did (`frame` in `src/main.rs`).
+- Every window has a fixed size (equal min/max size hints). If a compositor
+  shortcut maximizes or fullscreens a window anyway, the app asks for the
+  normal state back on the resize that follows (`fixed_size`).
 - winit 0.30 cannot set a parent (`xdg_toplevel.set_parent`) on Wayland, so
   dialogs are not transient children of the sheet.
 

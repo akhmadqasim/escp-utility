@@ -148,16 +148,42 @@ fn shown<T: ComponentHandle>(d: &Lazy<T>) -> bool {
 /// Create a dialog component; the platform exists once the sheet does.
 /// Its close box hides it and lets the sheet take clicks again; the makers
 /// of 201, 223, Status Monitor 3 and Current Settings replace that handler.
-fn make<T: ComponentHandle>(new: fn() -> Result<T, slint::PlatformError>) -> T {
+fn make<T: ComponentHandle + 'static>(new: fn() -> Result<T, slint::PlatformError>) -> T
+where
+    for<'a> Frame<'a>: slint::Global<'a, T>,
+{
     let d = new().expect("cannot create a dialog window");
-    fixed_size(d.window());
+    frame(&d);
     refresh_on_close(d.window());
     d
 }
 
-/// Windows keep their fixed size. Equal minimum and maximum sizes already
-/// stop GNOME from maximizing or fullscreening them; a compositor that does
-/// it anyway resizes the window, and then we ask for the normal state back.
+/// The windows draw their own frame (ui/common.slint `Frame`): GNOME's
+/// client-side frame always offers maximize. Our Close sends the window a
+/// close request, as the system close box did, so each window's
+/// `on_close_requested` still decides. Sent from a timer, not from inside
+/// the click that is still being handled.
+fn frame<T: ComponentHandle + 'static>(c: &T)
+where
+    for<'a> Frame<'a>: slint::Global<'a, T>,
+{
+    let weak = c.as_weak();
+    c.global::<Frame>().on_close(move || {
+        let weak = weak.clone();
+        Timer::single_shot(Duration::ZERO, move || {
+            if let Some(c) = weak.upgrade()
+                && let Err(e) = c.window().dispatch_event_with_result(slint::platform::WindowEvent::CloseRequested)
+            {
+                eprintln!("epson-l800-utility: cannot close the window: {e}");
+            }
+        });
+    });
+    fixed_size(c.window());
+}
+
+/// Windows keep their fixed size. They have no maximize button (see
+/// `frame`), but a compositor shortcut can still maximize or fullscreen
+/// them; that resizes the window, and then we ask for the normal state back.
 /// Only once per change: a compositor that keeps the state answers each
 /// request with another configure (and resize), which must not loop.
 fn fixed_size(w: &slint::Window) {
@@ -997,7 +1023,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     wire(&app);
 
-    fixed_size(app.main.window());
+    frame(&app.main);
     app.main.show()?;
     let res = slint::run_event_loop();
     // Let an in-flight status query finish Close/Exit, and keep new ones out

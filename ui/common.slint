@@ -91,10 +91,70 @@ export component DlgIcon inherits Rectangle {
     Image { x: 0; y: 0; width: 32px; height: 32px; source: root.source; }
 }
 
+// Our own window frame. On GNOME (Wayland) winit draws a client-side frame
+// (sctk-adwaita) whose maximize button cannot be hidden: it follows only the
+// compositor's capabilities, and winit's set_enabled_buttons does nothing on
+// Wayland. So the windows have no system frame and draw a Windows 10 style
+// caption: the title on the left and Close on the right. Dragging the bar
+// moves the window; a double-click does nothing. Close asks Rust (main.rs
+// `frame`) to send the window a close request, as the system close box did.
+export global Frame {
+    out property <length> caption-h: 30px;
+    callback close();
+}
+
+component TitleBar inherits Rectangle {
+    in property <string> title;
+    height: Frame.caption-h;
+    background: #ffffff;
+    WindowMoveArea {
+        Text {
+            x: 8px;
+            width: parent.width - 8px - 46px;
+            text: root.title;
+            font-size: 12px;
+            color: #000000;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    Rectangle {
+        x: parent.width - self.width;
+        width: 46px;
+        background: close.pressed ? #f1707a : close.has-hover ? #e81123 : transparent;
+        Path {
+            width: 10px;
+            height: 10px;
+            viewbox-width: 10;
+            viewbox-height: 10;
+            commands: "M 0 0 L 10 10 M 10 0 L 0 10";
+            stroke: close.has-hover ? #ffffff : #000000;
+            stroke-width: 1px;
+        }
+        close := TouchArea { clicked => { Frame.close(); } }
+    }
+}
+
+// A window with our frame: the caption on top of the client area, which
+// keeps the size Windows gives it, and a 1 px border on the window edge.
+export component FramedWindow inherits Window {
+    in property <length> client-height;
+    no-frame: true;
+    height: Frame.caption-h + root.client-height;
+    icon: @image-url("icons/app.svg");
+    TitleBar { y: 0; width: 100%; title: root.title; }
+    Rectangle {
+        y: Frame.caption-h;
+        width: 100%;
+        height: root.client-height;
+        @children
+    }
+    Rectangle { border-width: 1px; border-color: #a0a0a0; }
+}
+
 // Shared look of the utility dialogs: fixed client size, Tahoma-sized text.
 // Return runs the default button and Escape the cancel button.
-export component UtilityWindow inherits Window {
-    icon: @image-url("icons/app.svg");
+export component UtilityWindow inherits FramedWindow {
     callback default-action();
     callback cancel-action();
     default-font-size: 10.75px;
