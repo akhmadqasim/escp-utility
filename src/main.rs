@@ -1178,6 +1178,7 @@ mod tests {
         assert_eq!(app.prefs().copies, 1);
         p.set_copies(12000);
         assert_eq!(app.prefs().copies, 9999);
+        p.set_dirty(true);
         let tick = p.get_commit_tick();
         app.save_prefs(false); // dry run: shows the command, saves nothing
         assert_eq!(p.get_commit_tick(), tick + 1);

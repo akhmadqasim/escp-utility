@@ -546,8 +546,8 @@ YellowValue/Yellow: -25 *0 25
 
     #[test]
     fn user_values_round_trip() {
-        // Borderless photo, and a plain sheet with Reduce/Enlarge (which is
-        // greyed out, so not saved, while borderless).
+        // Borderless photo (Reduce/Enlarge is greyed out there, so left off),
+        // and a plain sheet with each Reduce/Enlarge method.
         for v in [
             Values {
                 quality: 4,
