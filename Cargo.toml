@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Printing Preferences and maintenance (nozzle check, head cleaning, status) for Epson inkjet printers on Linux, laid out like the Windows driver"
 license = "MIT"
+repository = "https://github.com/akhmadqasim/escp-utility"
 readme = "README.md"
 publish = false
 

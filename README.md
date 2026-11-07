@@ -54,6 +54,8 @@ Needs Rust (stable), CUPS, and a desktop with fontconfig. No `-dev` packages:
 fontconfig is loaded at run time.
 
 ```sh
+git clone https://github.com/akhmadqasim/escp-utility.git
+cd escp-utility
 cargo install --path . --root ~/.local          # -> ~/.local/bin/escp-utility
 install -Dm644 packaging/escp-utility.desktop ~/.local/share/applications/escp-utility.desktop
 install -Dm644 ui/icons/app.svg ~/.local/share/icons/hicolor/scalable/apps/escp-utility.svg
@@ -160,6 +162,9 @@ sudo systemctl disable --now ecbd           # or stop it, if you do not use Epso
 ```
 
 ## Build and test
+
+Coding agents: see [CLAUDE.md](CLAUDE.md) for the commands, the code map and
+the hard rules (nothing reaches a real printer from tests).
 
 ```sh
 cargo build --release
