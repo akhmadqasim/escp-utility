@@ -5,6 +5,7 @@
 //! Without one it takes the no-status path (226, then 227). See README.md.
 
 mod commands;
+mod settings;
 mod status;
 mod transport;
 
@@ -18,6 +19,7 @@ use slint::{ComponentHandle, Timer, TimerMode};
 slint::include_modules!();
 
 use commands::{Cleaning, Timestamp};
+use settings::Values;
 use status::{CleaningMonitor, Precheck, QueryError, Status, Step};
 use transport::{Mode, Sent};
 
@@ -180,6 +182,128 @@ struct App {
 }
 
 impl App {
+    fn open(&self, c: &impl ComponentHandle) {
+        let _ = c.show();
+        self.refresh_busy();
+    }
+
+    fn close(&self, c: &impl ComponentHandle) {
+        let _ = c.hide();
+        self.refresh_busy();
+    }
+
+    /// Windows runs the utility dialogs modally: while one is open, the
+    /// property sheet ignores clicks.
+    fn refresh_busy(&self) {
+        let open = [
+            self.wait.window(),
+            self.nozzle.window(),
+            self.nozzle_result.window(),
+            self.cleaning.window(),
+            self.power.window(),
+            self.progress.window(),
+            self.cleaning_done.window(),
+            self.paper_guide.window(),
+            self.message.window(),
+            self.monitor.window(),
+            self.info.window(),
+            self.dump.window(),
+        ]
+        .iter()
+        .any(|w| w.is_visible());
+        self.main.set_busy(open);
+    }
+
+    // Printing Preferences (settings.rs): the four settings pages edit the
+    // Prefs global; OK saves and closes, Apply saves, Cancel discards.
+
+    fn set_prefs(&self, v: &Values) {
+        let p = self.main.global::<Prefs>();
+        p.set_quality(v.quality as i32);
+        p.set_source(v.source as i32);
+        p.set_media(v.media as i32);
+        p.set_size(v.size as i32);
+        p.set_borderless(v.borderless);
+        p.set_landscape(v.landscape);
+        p.set_grayscale(v.grayscale);
+        p.set_reverse(v.reverse);
+        p.set_color_mode(v.color_mode as i32);
+        p.set_gamma(v.gamma as i32);
+        p.set_reduce(v.reduce);
+        p.set_by_percent(v.by_percent);
+        p.set_output_size(v.output_size as i32);
+        p.set_scale(v.scale as i32);
+        p.set_multi_page(v.multi_page);
+        p.set_poster(v.poster);
+        p.set_pages_index(v.pages_index as i32);
+        p.set_poster_index(v.poster_index as i32);
+        p.set_page_borders(v.page_borders);
+        p.set_copies(v.copies as i32);
+        p.set_collate(v.collate);
+        p.set_rotate180(v.rotate180);
+        p.set_mirror(v.mirror);
+    }
+
+    fn prefs(&self) -> Values {
+        let p = self.main.global::<Prefs>();
+        let ix = |i: i32| usize::try_from(i).unwrap_or(0);
+        Values {
+            quality: ix(p.get_quality()),
+            source: ix(p.get_source()),
+            media: ix(p.get_media()),
+            size: ix(p.get_size()),
+            borderless: p.get_borderless(),
+            landscape: p.get_landscape(),
+            grayscale: p.get_grayscale(),
+            reverse: p.get_reverse(),
+            color_mode: ix(p.get_color_mode()),
+            gamma: ix(p.get_gamma()),
+            reduce: p.get_reduce(),
+            by_percent: p.get_by_percent(),
+            output_size: ix(p.get_output_size()),
+            scale: p.get_scale().clamp(10, 400) as u32,
+            multi_page: p.get_multi_page(),
+            poster: p.get_poster(),
+            pages_index: ix(p.get_pages_index()),
+            poster_index: ix(p.get_poster_index()),
+            page_borders: p.get_page_borders(),
+            copies: p.get_copies().clamp(1, 99) as u32,
+            collate: p.get_collate(),
+            rotate180: p.get_rotate180(),
+            mirror: p.get_mirror(),
+        }
+        .constrained()
+    }
+
+    /// Save for this user with `lpoptions -p <queue> -o ...` (~/.cups/lpoptions).
+    /// In dry-run the command is only shown. Returns true when saved.
+    fn save_prefs(&self) -> bool {
+        let v = self.prefs();
+        if self.dry_run() {
+            let args = settings::save_args(&self.queue, &v);
+            self.dump.set_caption("Dry run".into());
+            self.dump.set_heading("Dry run: these settings were not saved. A real run would run this command:".into());
+            self.dump.set_content(format!("lpoptions {}\n", args.join(" \\\n    ")).into());
+            self.open(&self.dump);
+            self.main.global::<Prefs>().set_dirty(false);
+            return false;
+        }
+        match settings::save(&self.queue, &v) {
+            Ok(()) => {
+                self.main.global::<Prefs>().set_dirty(false);
+                true
+            }
+            Err(e) => {
+                self.message.set_utility("Printing Preferences".into());
+                self.message.set_heading("The settings could not be saved.".into());
+                self.message.set_body(e.into());
+                self.message.set_show_details(false);
+                self.open(&self.message);
+                false
+            }
+        }
+    }
+
     fn dry_run(&self) -> bool {
         matches!(self.mode, Mode::DryRun(_))
     }
@@ -191,7 +315,7 @@ impl App {
     fn show_wait(&self, u: Utility) {
         self.wait.set_utility(u.title().into());
         self.wait.set_glyph(u.icon());
-        let _ = self.wait.show();
+        self.open(&self.wait);
     }
 
     // Pre-check (FUN_004189c8): popup 201 while the status is read, then
@@ -209,7 +333,7 @@ impl App {
     }
 
     fn after_precheck(&self, u: Utility, res: QueryResult) {
-        let _ = self.wait.hide();
+        self.close(&self.wait);
         // No reply (or CUPS has jobs, so we did not ask): the no-status path.
         let Ok(s) = res else {
             self.have_status.set(false);
@@ -238,17 +362,17 @@ impl App {
         match u {
             Utility::NozzleCheck => {
                 self.nozzle.set_body(NOZZLE_INTRO.into());
-                let _ = self.nozzle.show();
+                self.open(&self.nozzle);
             }
             // Dialog 220 with status, 226 without: same layout and text.
             Utility::HeadCleaning => {
                 self.cleaning.set_body(CLEAN_INTRO.into());
                 self.cleaning.set_power(false);
-                let _ = self.cleaning.show();
+                self.open(&self.cleaning);
             }
             Utility::PaperGuide => {
                 self.paper_guide.set_body(PAPER_GUIDE.into());
-                let _ = self.paper_guide.show();
+                self.open(&self.paper_guide);
             }
         }
     }
@@ -259,7 +383,7 @@ impl App {
     /// FUN_00407dc4 opens and closes an empty RAW job. We send nothing.
     /// Then the utility ends (message 0x41E closes 265).
     fn paper_guide_cleaning(&self) {
-        let _ = self.paper_guide.hide();
+        self.close(&self.paper_guide);
         self.run_job(Utility::PaperGuide, None, |app, res| match res {
             // Live: the utility just ends. Dry run: say so, with any queue note.
             Ok(sent) if app.dry_run() => app.show_message(Utility::PaperGuide, "Dry run", &app.with_note(&sent.summary), false),
@@ -269,13 +393,13 @@ impl App {
     }
 
     fn nozzle_print(&self) {
-        let _ = self.nozzle.hide();
+        self.close(&self.nozzle);
         self.run_job(Utility::NozzleCheck, Some(("nozzle-check", commands::nozzle_check_job(Timestamp::now()))), |app, res| {
             match res {
                 Ok(sent) => {
                     app.show_dump(&sent);
                     app.nozzle_result.set_body(app.with_note(NOZZLE_RESULT).into());
-                    let _ = app.nozzle_result.show();
+                    app.open(&app.nozzle_result);
                 }
                 Err(f) => app.show_fail(Utility::NozzleCheck, f),
             }
@@ -283,12 +407,12 @@ impl App {
     }
 
     fn cleaning_start(&self, power: bool) {
-        let _ = self.cleaning.hide();
+        self.close(&self.cleaning);
         if power {
             // FUN_004118dc shows dialog 360 when the selected value is not 0
             // and E_IHBRG5P string 5060 exists (it does on the L800).
             self.power.set_body(POWER_CONFIRM.into());
-            let _ = self.power.show();
+            self.open(&self.power);
         } else {
             self.run_cleaning(Cleaning::Normal);
         }
@@ -346,7 +470,7 @@ impl App {
                 (then, res)
             },
             |app, (then, v)| {
-                let _ = app.wait.hide();
+                app.close(&app.wait);
                 then(app, v)
             },
         );
@@ -362,7 +486,7 @@ impl App {
         self.progress.set_value(0.0);
         self.progress.set_frame(0);
         self.progress.set_animate(true);
-        let _ = self.progress.show();
+        self.open(&self.progress);
         self.poll_timer.start(TimerMode::Repeated, status::POLL, on(|a| a.poll_cleaning()));
     }
 
@@ -400,7 +524,7 @@ impl App {
                     Duration::from_millis(500),
                     on(|a| {
                         a.progress.set_animate(false);
-                        let _ = a.progress.hide();
+                        a.close(&a.progress);
                         a.show_done(true);
                     }),
                 );
@@ -409,7 +533,7 @@ impl App {
                 self.poll_timer.stop();
                 self.bar_timer.stop();
                 self.progress.set_animate(false);
-                let _ = self.progress.hide();
+                self.close(&self.progress);
                 self.show_done(false);
             }
         }
@@ -419,7 +543,7 @@ impl App {
     fn show_done(&self, finished_seen: bool) {
         let text = if finished_seen { CLEAN_DONE_STATUS } else { CLEAN_DONE };
         self.cleaning_done.set_body(self.with_note(text).into());
-        let _ = self.cleaning_done.show();
+        self.open(&self.cleaning_done);
     }
 
     fn show_fail(&self, u: Utility, f: Fail) {
@@ -442,7 +566,7 @@ impl App {
         self.message.set_heading(heading.into());
         self.message.set_body(body.into());
         self.message.set_show_details(details);
-        let _ = self.message.show();
+        self.open(&self.message);
     }
 
     // Status Monitor 3 window.
@@ -451,7 +575,7 @@ impl App {
         self.monitor.set_printer(self.queue.clone().into());
         self.monitor.set_title_text("Please wait...".into());
         self.monitor.set_body("".into());
-        let _ = self.monitor.show();
+        self.open(&self.monitor);
         self.poll_monitor();
         self.monitor_timer.start(TimerMode::Repeated, MONITOR_POLL, on(|a| a.poll_monitor()));
     }
@@ -502,7 +626,7 @@ impl App {
             self.dump.set_caption("Dry run".into());
             self.dump.set_heading(sent.summary.clone().into());
             self.dump.set_content(dump.clone().into());
-            let _ = self.dump.show();
+            self.open(&self.dump);
         }
     }
 
@@ -515,7 +639,7 @@ impl App {
         let queue = self.queue.clone();
         bg(move || transport::queue_info(&queue), |app, text| {
             app.info.set_content(text.into());
-            let _ = app.info.show();
+            app.open(&app.info);
         });
     }
 }
@@ -534,14 +658,40 @@ fn ink_color(code: u8) -> slint::Color {
     slint::Color::from_argb_encoded(0xff00_0000 | rgb)
 }
 
+/// The Windows labels of each list (settings.rs tables).
+fn fill_lists(p: &Prefs) {
+    let model = |labels: Vec<&str>| -> slint::ModelRc<slint::SharedString> {
+        slint::VecModel::from_slice(&labels.into_iter().map(slint::SharedString::from).collect::<Vec<_>>())
+    };
+    let flags = |list: &[settings::Choice]| -> slint::ModelRc<bool> {
+        slint::VecModel::from_slice(&list.iter().map(|c| c.borderless).collect::<Vec<_>>())
+    };
+    let labels = |list: &[settings::Choice]| model(list.iter().map(|c| c.label).collect());
+    p.set_source_labels(labels(settings::SOURCES));
+    p.set_media_labels(labels(settings::MEDIA));
+    p.set_size_labels(labels(settings::SIZES));
+    p.set_output_labels(labels(settings::output_sizes()));
+    p.set_color_mode_labels(labels(settings::COLOR_MODES));
+    p.set_gamma_labels(labels(settings::GAMMAS));
+    p.set_preset_labels(model(settings::PRESETS.iter().map(|x| x.name).collect()));
+    p.set_source_borderless(flags(settings::SOURCES));
+    p.set_media_borderless(flags(settings::MEDIA));
+    p.set_size_borderless(flags(settings::SIZES));
+    p.set_first_document_size(settings::FIRST_DOCUMENT_SIZE as i32);
+}
+
 struct Args {
     queue: String,
     dump_dir: Option<PathBuf>,
+    /// Open on the Maintenance tab (Windows: launch code EPUT).
+    utility: bool,
 }
 
-const USAGE: &str = "Usage: epson-l800-utility [--dry-run] [--dump-dir DIR] [--queue NAME]
+const USAGE: &str = "Usage: epson-l800-utility [--utility] [--dry-run] [--dump-dir DIR] [--queue NAME]
 
-  --dry-run       write each job to a file and show a hexdump; never calls lp
+  --utility       open on the Maintenance tab (default: Main)
+  --dry-run       write each job to a file and show a hexdump; never calls lp,
+                  and show the lpoptions command instead of saving settings
   --dump-dir DIR  folder for dry-run files (default: ~/.cache/epson-l800-utility)
   --queue NAME    CUPS queue of the printer (default: L800)
 ";
@@ -550,10 +700,12 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut queue = "L800".to_string();
     let mut dry = false;
     let mut dir = None;
+    let mut utility = false;
     let mut it = args;
     while let Some(a) = it.next() {
         match a.as_str() {
             "--dry-run" => dry = true,
+            "--utility" => utility = true,
             "--dump-dir" => dir = Some(PathBuf::from(it.next().ok_or("--dump-dir needs a value")?)),
             "--queue" => queue = it.next().ok_or("--queue needs a value")?,
             "-h" | "--help" => {
@@ -570,7 +722,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     if dir.is_some() && !dry {
         return Err("--dump-dir needs --dry-run".into());
     }
-    Ok(Args { queue, dump_dir: dry.then(|| dir.unwrap_or_else(transport::default_dump_dir)) })
+    Ok(Args { queue, dump_dir: dry.then(|| dir.unwrap_or_else(transport::default_dump_dir)), utility })
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -610,6 +762,14 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     APP.with(|a| *a.borrow_mut() = Rc::downgrade(&app));
     app.main.set_dry_run(app.dry_run());
+    app.main.set_current_tab(if args.utility { 4 } else { 1 });
+    fill_lists(&app.main.global::<Prefs>());
+    app.set_prefs(&Values::default());
+    let queue = app.queue.clone();
+    bg(move || settings::load(&queue), |app, res| match res {
+        Ok(v) => app.set_prefs(&v),
+        Err(e) => eprintln!("epson-l800-utility: cannot read the printing preferences: {e}"),
+    });
     app.dump.set_monospace(true);
     wire(&app);
 
@@ -638,13 +798,53 @@ fn wire(ui: &App) {
     // Windows runs Epson's own updater (E_GUPA30.EXE); on Linux we open
     // Epson's driver download page for the L800 instead.
     ui.main.on_driver_update(|| launch("xdg-open", DRIVER_PAGE));
-    ui.main.on_close_window(|| {
+    // OK = save + close, Apply = save, Cancel (or the close box) = discard.
+    ui.main.on_ok(on(|a| {
+        if a.save_prefs() {
+            let _ = slint::quit_event_loop();
+        }
+    }));
+    ui.main.on_apply(on(|a| {
+        a.save_prefs();
+    }));
+    ui.main.on_cancel(|| {
         let _ = slint::quit_event_loop();
     });
     ui.main.window().on_close_requested(|| {
         let _ = slint::quit_event_loop();
         slint::CloseRequestResponse::HideWindow
     });
+    let prefs = ui.main.global::<Prefs>();
+    prefs.on_reset_defaults(on(|a| {
+        a.set_prefs(&Values::default());
+        a.main.global::<Prefs>().set_dirty(true);
+    }));
+    prefs.on_preset_picked(|i| {
+        let (Some(a), Some(preset)) = (app(), usize::try_from(i).ok().and_then(|i| settings::PRESETS.get(i))) else { return };
+        let mut v = a.prefs();
+        preset.apply(&mut v);
+        a.set_prefs(&v.constrained());
+        let p = a.main.global::<Prefs>();
+        p.set_dirty(true);
+        p.set_preset(i);
+    });
+    // A dialog closed with its close box: the sheet takes clicks again.
+    for w in [
+        ui.nozzle.window(),
+        ui.nozzle_result.window(),
+        ui.cleaning.window(),
+        ui.power.window(),
+        ui.cleaning_done.window(),
+        ui.paper_guide.window(),
+        ui.message.window(),
+        ui.info.window(),
+        ui.dump.window(),
+    ] {
+        w.on_close_requested(|| {
+            Timer::single_shot(Duration::ZERO, on(|a| a.refresh_busy()));
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
 
     // Dialogs 201 and 223 have no way out on Windows; they close themselves.
     ui.wait.window().on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
@@ -652,15 +852,15 @@ fn wire(ui: &App) {
 
     ui.nozzle.on_print(on(|a| a.nozzle_print()));
     ui.nozzle.on_cancel(on(|a| {
-        let _ = a.nozzle.hide();
+        a.close(&a.nozzle);
     }));
     // [Clean] goes to the Head Cleaning utility (state 2 in FUN_00413b60).
     ui.nozzle_result.on_clean(on(|a| {
-        let _ = a.nozzle_result.hide();
+        a.close(&a.nozzle_result);
         a.start(Utility::HeadCleaning);
     }));
     ui.nozzle_result.on_finish(on(|a| {
-        let _ = a.nozzle_result.hide();
+        a.close(&a.nozzle_result);
     }));
 
     ui.cleaning.on_start(|power| {
@@ -669,53 +869,54 @@ fn wire(ui: &App) {
         }
     });
     ui.cleaning.on_cancel(on(|a| {
-        let _ = a.cleaning.hide();
+        a.close(&a.cleaning);
     }));
     ui.power.on_ok(on(|a| {
-        let _ = a.power.hide();
+        a.close(&a.power);
         a.run_cleaning(Cleaning::Power);
     }));
     // [Cancel] returns to the Head Cleaning dialog.
     ui.power.on_cancel(on(|a| {
-        let _ = a.power.hide();
-        let _ = a.cleaning.show();
+        a.close(&a.power);
+        a.open(&a.cleaning);
     }));
     // [Print Nozzle Check Pattern] starts the Nozzle Check (state 1).
     ui.cleaning_done.on_nozzle_check(on(|a| {
-        let _ = a.cleaning_done.hide();
+        a.close(&a.cleaning_done);
         a.start(Utility::NozzleCheck);
     }));
     ui.cleaning_done.on_finish(on(|a| {
-        let _ = a.cleaning_done.hide();
+        a.close(&a.cleaning_done);
     }));
     ui.paper_guide.on_cleaning(on(|a| a.paper_guide_cleaning()));
     ui.paper_guide.on_cancel(on(|a| {
-        let _ = a.paper_guide.hide();
+        a.close(&a.paper_guide);
     }));
     ui.message.on_ok(on(|a| {
-        let _ = a.message.hide();
+        a.close(&a.message);
     }));
     ui.message.on_details(on(|a| {
-        let _ = a.message.hide();
+        a.close(&a.message);
         a.open_monitor();
     }));
     // "Print Queue": the GNOME printer settings show the CUPS queue.
     ui.monitor.on_print_queue(|| launch("gnome-control-center", "printers"));
     ui.monitor.on_ok(on(|a| {
         a.monitor_timer.stop();
-        let _ = a.monitor.hide();
+        a.close(&a.monitor);
     }));
     ui.monitor.window().on_close_requested(|| {
         if let Some(a) = app() {
             a.monitor_timer.stop();
         }
+        Timer::single_shot(Duration::ZERO, on(|a| a.refresh_busy()));
         slint::CloseRequestResponse::HideWindow
     });
     ui.info.on_ok(on(|a| {
-        let _ = a.info.hide();
+        a.close(&a.info);
     }));
     ui.dump.on_ok(on(|a| {
-        let _ = a.dump.hide();
+        a.close(&a.dump);
     }));
 }
 

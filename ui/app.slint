@@ -16,143 +16,9 @@
 
 import { Button, ComboBox, Palette, TextEdit } from "std-widgets.slint";
 
-export global Strings {
-    out property <string> alignment-off: "Not available on Linux yet: Print Head Alignment writes permanent calibration values to the printer, so it stays off until a test run is approved.";
-    out property <string> speed-off: "Not available on Linux: Speed & Progress holds Windows print-spooler settings only.";
-}
-
-component DlgText inherits Text {
-    font-size: 11px;
-    wrap: word-wrap;
-    vertical-alignment: top;
-    color: #000000;
-}
-
-// SS_ETCHEDHORZ: a dark line with a light line under it.
-component EtchedLine inherits Rectangle {
-    height: 3px;
-    Rectangle { y: 0; height: 1px; background: #a0a0a0; }
-    Rectangle { y: 1px; height: 1px; background: #ffffff; }
-}
-
-// A push button that can show a tooltip even while disabled.
-component DlgButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> enabled: true;
-    in property <bool> primary;
-    in property <string> tip;
-    callback clicked;
-    Button {
-        width: 100%;
-        height: 100%;
-        text: root.text;
-        enabled: root.enabled;
-        primary: root.primary;
-        clicked => { root.clicked(); }
-    }
-    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
-}
-
-// Owner-drawn icon buttons of dialog 903: a 41 x 42 push button with a 32 x 32
-// picture at (5,5), moved by (+1,+1) while pressed.
-component IconButton inherits Rectangle {
-    in property <image> icon;
-    in property <bool> enabled: true;
-    in property <string> tip;
-    callback clicked;
-    border-radius: 4px;
-    border-width: 1px;
-    border-color: !root.enabled ? #e0e0e0 : (ta.has-hover || fs.has-focus) ? #7a9cc6 : #d0d0d0;
-    background: !root.enabled ? #f5f5f5 : ta.pressed ? #cfe0f5 : ta.has-hover ? #eef5fd : #fdfdfd;
-    Image {
-        x: ta.pressed ? 6px : 5px;
-        y: ta.pressed ? 6px : 5px;
-        width: 32px;
-        height: 32px;
-        source: root.icon;
-        opacity: root.enabled ? 1.0 : 0.35;
-    }
-    ta := TouchArea {
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
-    }
-    fs := FocusScope {
-        enabled: root.enabled;
-        key-pressed(e) => {
-            if (e.text == " " || e.text == Key.Return) {
-                root.clicked();
-                return accept;
-            }
-            reject
-        }
-    }
-    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
-}
-
-component RadioButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> checked;
-    callback picked;
-    Rectangle {
-        x: 0;
-        y: (parent.height - self.height) / 2;
-        width: 13px;
-        height: 13px;
-        border-radius: 6.5px;
-        border-width: 1px;
-        border-color: #333333;
-        background: #ffffff;
-        Rectangle {
-            width: 7px;
-            height: 7px;
-            border-radius: 3.5px;
-            background: Palette.accent-background;
-            visible: root.checked;
-        }
-    }
-    DlgText {
-        x: 18px;
-        width: parent.width - 18px;
-        height: parent.height;
-        vertical-alignment: center;
-        text: root.text;
-    }
-    TouchArea { clicked => { root.picked(); } }
-}
-
-// Control 516: 33 x 36 box, 32 x 32 icon drawn at (0,0), not centred.
-component DlgIcon inherits Rectangle {
-    in property <image> source;
-    width: 33px;
-    height: 36px;
-    Image { x: 0; y: 0; width: 32px; height: 32px; source: root.source; }
-}
-
-// Shared look of the utility dialogs: fixed client size, Tahoma-sized text.
-// Return runs the default button and Escape the cancel button.
-component UtilityWindow inherits Window {
-    callback default-action();
-    callback cancel-action();
-    default-font-size: 11px;
-    default-font-family: "Liberation Sans";
-    background: #f0f0f0;
-    forward-focus: keys;
-    init => { Palette.color-scheme = ColorScheme.light; }
-    keys := FocusScope {
-        key-pressed(e) => {
-            if (e.text == Key.Return) {
-                root.default-action();
-                return accept;
-            }
-            if (e.text == Key.Escape) {
-                root.cancel-action();
-                return accept;
-            }
-            reject
-        }
-    }
-    @children
-}
+import { Strings, DlgText, EtchedLine, DlgButton, IconButton, RadioButton, DlgIcon, UtilityWindow, InkLevel, InkMeter } from "common.slint";
+import { Prefs, ShortcutsPage, MainPage, AdvancedPage, PageLayoutPage } from "pages.slint";
+export { InkLevel, Prefs }
 
 export struct UtilityRow {
     id: string,
@@ -171,17 +37,14 @@ export struct UtilityRow {
 }
 
 // ---------------------------------------------------------------------------
-// Main window: a property sheet with dialog 903 as its only page.
-// The frame (tab strip height, insets, button row) is not in the resources and
-// depends on the Windows theme, so it is approximate. The comctl32 template
-// puts the tab control at (6,7) px with 75 x 23 px buttons.
-export component MainWindow inherits Window {
-    in property <string> queue: "L800";
-    in property <bool> dry-run;
+// Dialog 903 "Maintenance" (295x267 DLU = 443x434 px).
+component MaintenancePage inherits Rectangle {
     in property <string> version-text;
     callback utility-clicked(string);
     callback driver-update();
-    callback close-window();
+    width: 443px;
+    height: 434px;
+    background: #ffffff;
 
     // Six slots, filled like E_IUICG5P FUN_68fd966c: table order Status
     // Monitor 3, Auto Nozzle Check, Nozzle Check, Head Cleaning, Print Head
@@ -217,127 +80,180 @@ export component MainWindow inherits Window {
           title-y: 319px, title-w: 300px, button-y: 320px, line-y: 336px, desc-y: 341px },
     ];
 
-    property <length> tab-strip-h: 21px;
-    property <length> inset: 2px;
+    for u in root.utilities: Rectangle {
+        // 3906-3911 OWNERDRAW (40,7+38n, 27x26 DLU)
+        IconButton {
+            x: 60px;
+            y: u.button-y;
+            width: 41px;
+            height: 42px;
+            icon: u.icon;
+            enabled: u.enabled;
+            tip: u.tip;
+            clicked => { root.utility-clicked(u.id); }
+        }
+        // 3900-3905 LTEXT (77,6+38n, 200x8 DLU)
+        DlgText {
+            x: 116px;
+            y: u.title-y;
+            width: u.title-w;
+            height: 13px;
+            text: u.title;
+            wrap: no-wrap;
+            color: u.enabled ? #000000 : #8a8a8a;
+        }
+        // 3918-3923 ETCHEDHORZ (77,17+38n, 200x2 DLU)
+        EtchedLine {
+            x: 116px;
+            y: u.line-y;
+            width: 300px;
+        }
+        // 3912-3917 LTEXT (77,20+38n, 200x18 DLU)
+        DlgText {
+            x: 116px;
+            y: u.desc-y;
+            width: 300px;
+            height: 29px;
+            text: u.description;
+            color: u.enabled ? #000000 : #8a8a8a;
+        }
+    }
 
-    title: root.queue + " Printing Preferences" + (root.dry-run ? "  (dry run: nothing is sent)" : "");
+    // 3929 LTEXT "Language" (23,232,46x8 DLU)
+    DlgText { x: 35px; y: 377px; width: 69px; height: 13px; text: "Language"; wrap: no-wrap; }
+    // 3930 COMBOBOX droplist (71,231,134 DLU wide; closed height 21 px)
+    ComboBox {
+        x: 107px;
+        y: 375px;
+        width: 201px;
+        height: 21px;
+        model: ["English"];
+        current-index: 0;
+    }
+    // 3927 PUSHBUTTON "Speed && Progress..." (210,230,77x14 DLU)
+    DlgButton {
+        x: 315px; y: 374px; width: 116px; height: 23px;
+        text: "Speed & Progress...";
+        enabled: false;
+        tip: Strings.speed-off;
+    }
+    // 3928 PUSHBUTTON "Driver Update" (210,248,77x14 DLU)
+    DlgButton {
+        x: 315px; y: 403px; width: 116px; height: 23px;
+        text: "Driver Update";
+        clicked => { root.driver-update(); }
+    }
+    // 3926 LTEXT (19,251,60x8 DLU): version text
+    DlgText { x: 29px; y: 408px; width: 90px; height: 13px; text: "Version " + root.version-text; wrap: no-wrap; }
+}
+
+// One tab of the property sheet: 16x16 icon + the page caption (PSP_USEICONID,
+// no PSP_USETITLE, so the label is the dialog caption).
+component SheetTab inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> selected;
+    callback clicked;
+    width: 30px + label.preferred-width;
+    height: root.selected ? 23px : 21px;
+    y: root.selected ? 0 : 2px;
+    background: root.selected ? #ffffff : ta.has-hover ? #e5f1fb : #f0f0f0;
+    border-width: 1px;
+    border-color: #adadad;
+    Image { x: 6px; y: (parent.height - 16px) / 2; width: 16px; height: 16px; source: root.icon; }
+    label := DlgText { x: 26px; height: parent.height; vertical-alignment: center; text: root.text; wrap: no-wrap; }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+// ---------------------------------------------------------------------------
+// Main window: the "Printing Preferences" property sheet. E_IUICG5P adds the
+// five pages unconditionally in this order (LAYOUT.md §7.1): Shortcuts (904),
+// Main (900), Advanced (901), Page Layout (902), Maintenance (903). Sheet
+// buttons come from the comctl32 template: 75x23 px, 6 px apart, right-aligned;
+// tab control at (6,7). The tab strip height and insets depend on the Windows
+// theme, so the frame is approximate. Help is left out (no help file here).
+export component MainWindow inherits Window {
+    in property <string> queue: "L800";
+    in property <bool> dry-run;
+    in property <string> version-text;
+    in-out property <int> current-tab: 1;
+    // A utility dialog is open: like Windows' modal dialogs, ignore clicks here.
+    in property <bool> busy;
+    callback utility-clicked(string);
+    callback driver-update();
+    callback ok();
+    callback cancel();
+    callback apply();
+
+    property <length> tab-strip-h: 23px;
+    property <length> inset: 2px;
+    property <length> page-y: 7px + root.tab-strip-h;
+
+    title: root.queue + " Printing Preferences" + (root.dry-run ? "  (dry run: nothing is sent or saved)" : "");
     width: 6px + root.inset + 443px + root.inset + 6px;
-    height: 7px + root.tab-strip-h + root.inset + 434px + root.inset + 7px + 23px + 7px;
+    height: root.page-y + root.inset + 434px + root.inset + 7px + 23px + 7px;
     default-font-size: 11px;
     default-font-family: "Liberation Sans";
     background: #f0f0f0;
     init => { Palette.color-scheme = ColorScheme.light; }
 
-    // Tab strip: one tab, "Maintenance" (the caption of dialog 903).
+    // Tab display area with the 443x434 px page.
     Rectangle {
         x: 6px;
-        y: 7px;
-        width: 78px;
-        height: root.tab-strip-h + 1px;
-        background: #ffffff;
-        border-width: 1px;
-        border-color: #adadad;
-        DlgText {
-            vertical-alignment: center;
-            horizontal-alignment: center;
-            text: "Maintenance";
-        }
-    }
-
-    // Tab display area with the 443 x 434 px page.
-    Rectangle {
-        x: 6px;
-        y: 7px + root.tab-strip-h;
+        y: root.page-y - 1px;
         width: 443px + 2 * root.inset;
         height: 434px + 2 * root.inset;
         background: #ffffff;
         border-width: 1px;
         border-color: #adadad;
-        // Join the selected tab to the page.
-        Rectangle { x: 1px; y: 0; width: 76px; height: 1px; background: #ffffff; }
-
-        page := Rectangle {
+        Rectangle {
             x: root.inset;
             y: root.inset;
             width: 443px;
             height: 434px;
-
-            for u in root.utilities: Rectangle {
-                // 3906-3911 OWNERDRAW (40,7+38n, 27x26 DLU)
-                IconButton {
-                    x: 60px;
-                    y: u.button-y;
-                    width: 41px;
-                    height: 42px;
-                    icon: u.icon;
-                    enabled: u.enabled;
-                    tip: u.tip;
-                    clicked => { root.utility-clicked(u.id); }
-                }
-                // 3900-3905 LTEXT (77,6+38n, 200x8 DLU)
-                DlgText {
-                    x: 116px;
-                    y: u.title-y;
-                    width: u.title-w;
-                    height: 13px;
-                    text: u.title;
-                    wrap: no-wrap;
-                    color: u.enabled ? #000000 : #8a8a8a;
-                }
-                // 3918-3923 ETCHEDHORZ (77,17+38n, 200x2 DLU)
-                EtchedLine {
-                    x: 116px;
-                    y: u.line-y;
-                    width: 300px;
-                }
-                // 3912-3917 LTEXT (77,20+38n, 200x18 DLU)
-                DlgText {
-                    x: 116px;
-                    y: u.desc-y;
-                    width: 300px;
-                    height: 29px;
-                    text: u.description;
-                    color: u.enabled ? #000000 : #8a8a8a;
-                }
+            if root.current-tab == 0: ShortcutsPage { }
+            if root.current-tab == 1: MainPage { }
+            if root.current-tab == 2: AdvancedPage { }
+            if root.current-tab == 3: PageLayoutPage { }
+            if root.current-tab == 4: MaintenancePage {
+                version-text: root.version-text;
+                utility-clicked(id) => { root.utility-clicked(id); }
+                driver-update => { root.driver-update(); }
             }
-
-            // 3929 LTEXT "Language" (23,232,46x8 DLU)
-            DlgText { x: 35px; y: 377px; width: 69px; height: 13px; text: "Language"; wrap: no-wrap; }
-            // 3930 COMBOBOX droplist (71,231,134 DLU wide; closed height 21 px)
-            ComboBox {
-                x: 107px;
-                y: 375px;
-                width: 201px;
-                height: 21px;
-                model: ["English"];
-                current-index: 0;
-            }
-            // 3927 PUSHBUTTON "Speed && Progress..." (210,230,77x14 DLU)
-            DlgButton {
-                x: 315px; y: 374px; width: 116px; height: 23px;
-                text: "Speed & Progress...";
-                enabled: false;
-                tip: Strings.speed-off;
-            }
-            // 3928 PUSHBUTTON "Driver Update" (210,248,77x14 DLU)
-            DlgButton {
-                x: 315px; y: 403px; width: 116px; height: 23px;
-                text: "Driver Update";
-                clicked => { root.driver-update(); }
-            }
-            // 3926 LTEXT (19,251,60x8 DLU): version text
-            DlgText { x: 29px; y: 408px; width: 90px; height: 13px; text: "Version " + root.version-text; wrap: no-wrap; }
         }
     }
 
-    DlgButton {
-        x: root.width - 6px - 75px;
-        y: root.height - 7px - 23px;
-        width: 75px;
-        height: 23px;
-        text: "Close";
-        clicked => { root.close-window(); }
+    HorizontalLayout {
+        x: 6px;
+        y: 7px;
+        height: root.tab-strip-h;
+        alignment: start;
+        for t[i] in [
+            { text: "Shortcuts", icon: @image-url("icons/tab-shortcuts.svg") },
+            { text: "Main", icon: @image-url("icons/tab-main.svg") },
+            { text: "Advanced", icon: @image-url("icons/tab-advanced.svg") },
+            { text: "Page Layout", icon: @image-url("icons/tab-layout.svg") },
+            { text: "Maintenance", icon: @image-url("icons/tab-maintenance.svg") },
+        ]: Rectangle {
+            width: tab.width;
+            tab := SheetTab {
+                text: t.text;
+                icon: t.icon;
+                selected: root.current-tab == i;
+                clicked => { root.current-tab = i; }
+            }
+            // The selected tab joins the page.
+            if root.current-tab == i: Rectangle { x: 1px; y: parent.height - 1px; width: tab.width - 2px; height: 2px; background: #ffffff; }
+        }
     }
+
+    property <length> btn-y: root.height - 7px - 23px;
+    DlgButton { x: root.width - 6px - 3 * 75px - 2 * 6px; y: root.btn-y; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
+    DlgButton { x: root.width - 6px - 2 * 75px - 6px; y: root.btn-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
+    DlgButton { x: root.width - 6px - 75px; y: root.btn-y; width: 75px; height: 23px; text: "Apply"; enabled: Prefs.dirty; clicked => { root.apply(); } }
+
+    // Swallow clicks while a utility dialog is open.
+    if root.busy: TouchArea { width: 100%; height: 100%; }
 }
 
 // ---------------------------------------------------------------------------
@@ -632,33 +548,6 @@ export component TextDialog inherits UtilityWindow {
         font-family: root.monospace ? "DejaVu Sans Mono" : "Liberation Sans";
     }
     DlgButton { x: 399px; y: 470px; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
-}
-
-export struct InkLevel {
-    name: string,
-    color: color,
-    // 0..100, or -1 when the printer reports no value
-    level: int,
-}
-
-// Ink meter (EPInkMeterLib, 30x42 DLU): a tank that fills from the bottom.
-component InkMeter inherits Rectangle {
-    in property <InkLevel> ink;
-    background: #ffffff;
-    border-width: 1px;
-    border-color: #808080;
-    Rectangle {
-        x: 1px;
-        width: parent.width - 2px;
-        height: (parent.height - 2px) * max(root.ink.level, 0) / 100;
-        y: parent.height - 1px - self.height;
-        background: root.ink.color;
-    }
-    if root.ink.level < 0: DlgText {
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        text: "?";
-    }
 }
 
 // EPSON Status Monitor 3, E_IASRG5P dialog 102 (319x419 DLU template),

@@ -15,6 +15,36 @@ use slint::{ComponentHandle, PhysicalSize, PlatformError};
 
 slint::include_modules!();
 
+#[path = "../src/settings.rs"]
+#[allow(dead_code)] // only the tables are used here
+mod settings;
+
+/// Same lists as main.rs `fill_lists`.
+fn fill_lists(p: &Prefs) {
+    let labels = |list: &[settings::Choice]| -> slint::ModelRc<slint::SharedString> {
+        slint::VecModel::from_slice(&list.iter().map(|c| slint::SharedString::from(c.label)).collect::<Vec<_>>())
+    };
+    let flags = |list: &[settings::Choice]| -> slint::ModelRc<bool> {
+        slint::VecModel::from_slice(&list.iter().map(|c| c.borderless).collect::<Vec<_>>())
+    };
+    p.set_source_labels(labels(settings::SOURCES));
+    p.set_media_labels(labels(settings::MEDIA));
+    p.set_size_labels(labels(settings::SIZES));
+    p.set_output_labels(labels(settings::output_sizes()));
+    p.set_color_mode_labels(labels(settings::COLOR_MODES));
+    p.set_gamma_labels(labels(settings::GAMMAS));
+    p.set_preset_labels(slint::VecModel::from_slice(
+        &settings::PRESETS.iter().map(|x| slint::SharedString::from(x.name)).collect::<Vec<_>>(),
+    ));
+    p.set_source_borderless(flags(settings::SOURCES));
+    p.set_media_borderless(flags(settings::MEDIA));
+    p.set_size_borderless(flags(settings::SIZES));
+    p.set_first_document_size(settings::FIRST_DOCUMENT_SIZE as i32);
+    p.set_color_mode(1);
+    p.set_gamma(1);
+    p.set_quality(1);
+}
+
 /// The window that was created last, shared with the platform.
 type Last = Rc<RefCell<Option<Rc<MinimalSoftwareWindow>>>>;
 
@@ -57,8 +87,11 @@ fn main() {
     let main = MainWindow::new().unwrap();
     main.set_version_text(env!("CARGO_PKG_VERSION").into());
     main.set_dry_run(true);
-    let (mw, mh) = (main.window().size().width.max(459), main.window().size().height.max(503));
-    render(&p, "main", (mw, mh), || main.show(), &out);
+    fill_lists(&main.global::<Prefs>());
+    for (tab, name) in [(0, "sheet-904-shortcuts"), (1, "sheet-900-main"), (2, "sheet-901-advanced"), (3, "sheet-902-page-layout"), (4, "main")] {
+        main.set_current_tab(tab);
+        render(&p, name, (459, 505), || main.show(), &out);
+    }
 
     let d = NozzleCheckDialog::new().unwrap();
     d.set_body("Before you print the nozzle check pattern, make sure the printer is switched on and connected to this computer.\n\nTake out the CD/DVD tray and set the front tray to the paper position; otherwise the nozzle check cannot run. Load A4 or Letter plain paper in the sheet feeder.\n\nClick [Print] to print the pattern, or [Cancel] to close.".into());

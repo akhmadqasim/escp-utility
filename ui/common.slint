@@ -1,0 +1,446 @@
+// Shared widgets for the driver dialogs: Windows-sized text, push buttons,
+// check boxes, radio buttons, group boxes, combo boxes and spin edits, all
+// drawn at the pixel rectangles of the resources (see app.slint).
+
+import { Button, ComboBox, Palette, Slider } from "std-widgets.slint";
+
+export global Strings {
+    out property <string> no-linux: "No Linux equivalent: the L800 CUPS driver has no such option.";
+    out property <string> windows-only: "Windows-only: this belongs to the Windows driver or print spooler.";
+    out property <string> alignment-off: "Not available on Linux yet: Print Head Alignment writes permanent calibration values to the printer, so it stays off until a test run is approved.";
+    out property <string> speed-off: "Not available on Linux: Speed & Progress holds Windows print-spooler settings only.";
+}
+
+export component DlgText inherits Text {
+    font-size: 11px;
+    wrap: word-wrap;
+    vertical-alignment: top;
+    color: #000000;
+}
+
+// SS_ETCHEDHORZ: a dark line with a light line under it.
+export component EtchedLine inherits Rectangle {
+    height: 3px;
+    Rectangle { y: 0; height: 1px; background: #a0a0a0; }
+    Rectangle { y: 1px; height: 1px; background: #ffffff; }
+}
+
+// A push button that can show a tooltip even while disabled.
+export component DlgButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> primary;
+    in property <string> tip;
+    callback clicked;
+    Button {
+        width: 100%;
+        height: 100%;
+        text: root.text;
+        enabled: root.enabled;
+        primary: root.primary;
+        clicked => { root.clicked(); }
+    }
+    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
+}
+
+// Owner-drawn icon buttons of dialog 903: a 41 x 42 push button with a 32 x 32
+// picture at (5,5), moved by (+1,+1) while pressed.
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> enabled: true;
+    in property <string> tip;
+    callback clicked;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: !root.enabled ? #e0e0e0 : (ta.has-hover || fs.has-focus) ? #7a9cc6 : #d0d0d0;
+    background: !root.enabled ? #f5f5f5 : ta.pressed ? #cfe0f5 : ta.has-hover ? #eef5fd : #fdfdfd;
+    Image {
+        x: ta.pressed ? 6px : 5px;
+        y: ta.pressed ? 6px : 5px;
+        width: 32px;
+        height: 32px;
+        source: root.icon;
+        opacity: root.enabled ? 1.0 : 0.35;
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == " " || e.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
+}
+
+export component RadioButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    callback picked;
+    Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: 13px;
+        height: 13px;
+        border-radius: 6.5px;
+        border-width: 1px;
+        border-color: #333333;
+        background: #ffffff;
+        Rectangle {
+            width: 7px;
+            height: 7px;
+            border-radius: 3.5px;
+            background: Palette.accent-background;
+            visible: root.checked;
+        }
+    }
+    DlgText {
+        x: 18px;
+        width: parent.width - 18px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.text;
+    }
+    TouchArea { clicked => { root.picked(); } }
+}
+
+// Control 516: 33 x 36 box, 32 x 32 icon drawn at (0,0), not centred.
+export component DlgIcon inherits Rectangle {
+    in property <image> source;
+    width: 33px;
+    height: 36px;
+    Image { x: 0; y: 0; width: 32px; height: 32px; source: root.source; }
+}
+
+// Shared look of the utility dialogs: fixed client size, Tahoma-sized text.
+// Return runs the default button and Escape the cancel button.
+export component UtilityWindow inherits Window {
+    callback default-action();
+    callback cancel-action();
+    default-font-size: 11px;
+    default-font-family: "Liberation Sans";
+    background: #f0f0f0;
+    forward-focus: keys;
+    init => { Palette.color-scheme = ColorScheme.light; }
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (e.text == Key.Return) {
+                root.default-action();
+                return accept;
+            }
+            if (e.text == Key.Escape) {
+                root.cancel-action();
+                return accept;
+            }
+            reject
+        }
+    }
+    @children
+}
+
+
+// BS_GROUPBOX: a thin frame with the title cut into its top edge.
+export component Group inherits Rectangle {
+    in property <string> title;
+    in property <color> page: #ffffff;
+    Rectangle {
+        y: 6px;
+        height: parent.height - 6px;
+        border-width: 1px;
+        border-color: #d5dfe5;
+        border-radius: 3px;
+    }
+    if root.title != "": Rectangle {
+        x: 6px;
+        y: 0;
+        width: t.preferred-width + 4px;
+        height: 13px;
+        background: root.page;
+        t := DlgText { x: 2px; text: root.title; wrap: no-wrap; color: #0046d5; }
+    }
+}
+
+// BS_AUTOCHECKBOX at its resource rectangle.
+export component CheckBox inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> tip;
+    callback toggled;
+    Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: 13px;
+        height: 13px;
+        border-width: 1px;
+        border-color: root.enabled ? #333333 : #a0a0a0;
+        background: root.enabled ? #ffffff : #f4f4f4;
+        if root.checked: Text {
+            text: "✓";
+            font-size: 11px;
+            color: root.enabled ? Palette.accent-background : #a0a0a0;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    DlgText {
+        x: 18px;
+        width: parent.width - 18px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.text;
+        color: root.enabled ? #000000 : #8a8a8a;
+    }
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled();
+        }
+    }
+    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
+}
+
+// Radio button that can be disabled and explain why.
+export component Radio inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> tip;
+    callback picked;
+    Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: 13px;
+        height: 13px;
+        border-radius: 6.5px;
+        border-width: 1px;
+        border-color: root.enabled ? #333333 : #a0a0a0;
+        background: root.enabled ? #ffffff : #f4f4f4;
+        Rectangle {
+            width: 7px;
+            height: 7px;
+            border-radius: 3.5px;
+            background: root.enabled ? Palette.accent-background : #a0a0a0;
+            visible: root.checked;
+        }
+    }
+    DlgText {
+        x: 18px;
+        width: parent.width - 18px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.text;
+        color: root.enabled ? #000000 : #8a8a8a;
+    }
+    TouchArea {
+        enabled: root.enabled;
+        clicked => { root.picked(); }
+    }
+    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
+}
+
+// CBS_DROPDOWNLIST, closed height 21 px.
+export component Combo inherits Rectangle {
+    in property <[string]> model;
+    in-out property <int> current-index;
+    in property <bool> enabled: true;
+    in property <string> tip;
+    callback selected;
+    height: 21px;
+    ComboBox {
+        width: 100%;
+        height: 100%;
+        model: root.model;
+        current-index <=> root.current-index;
+        enabled: root.enabled;
+        selected => { root.selected(); }
+    }
+    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
+}
+
+// EDITTEXT + msctls_updown32: a number stepped through `values`.
+export component Spin inherits Rectangle {
+    in property <[int]> values;
+    in-out property <int> index;
+    in property <bool> enabled: true;
+    in property <string> tip;
+    callback changed;
+    background: root.enabled ? #ffffff : #f4f4f4;
+    border-width: 1px;
+    border-color: #7a7a7a;
+    DlgText {
+        x: 4px;
+        width: parent.width - 21px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.values[root.index];
+        color: root.enabled ? #000000 : #8a8a8a;
+    }
+    // up/down arrows, 17 px wide like the updown control
+    Rectangle {
+        x: parent.width - 17px;
+        width: 17px;
+        height: parent.height / 2;
+        background: up.pressed ? #cfe0f5 : #f0f0f0;
+        border-width: 1px;
+        border-color: #a0a0a0;
+        Text { text: "▲"; font-size: 7px; color: root.enabled ? #333333 : #a0a0a0; horizontal-alignment: center; vertical-alignment: center; }
+        up := TouchArea {
+            enabled: root.enabled && root.index + 1 < root.values.length;
+            clicked => {
+                root.index += 1;
+                root.changed();
+            }
+        }
+    }
+    Rectangle {
+        x: parent.width - 17px;
+        y: parent.height / 2;
+        width: 17px;
+        height: parent.height / 2;
+        background: down.pressed ? #cfe0f5 : #f0f0f0;
+        border-width: 1px;
+        border-color: #a0a0a0;
+        Text { text: "▼"; font-size: 7px; color: root.enabled ? #333333 : #a0a0a0; horizontal-alignment: center; vertical-alignment: center; }
+        down := TouchArea {
+            enabled: root.enabled && root.index > 0;
+            clicked => {
+                root.index -= 1;
+                root.changed();
+            }
+        }
+    }
+    if root.tip != "": Tooltip { text: @markdown("\{root.tip}"); }
+}
+
+// EDITTEXT + msctls_updown32 for a number from `minimum` to `maximum`;
+// the number can also be typed.
+export component NumberSpin inherits Rectangle {
+    in-out property <int> value;
+    in property <int> minimum;
+    in property <int> maximum;
+    in property <bool> enabled: true;
+    callback changed;
+    background: root.enabled ? #ffffff : #f4f4f4;
+    border-width: 1px;
+    border-color: #7a7a7a;
+    input := TextInput {
+        x: 4px;
+        width: parent.width - 21px;
+        height: parent.height;
+        vertical-alignment: center;
+        font-size: 11px;
+        text: root.value;
+        enabled: root.enabled;
+        input-type: number;
+        color: root.enabled ? #000000 : #8a8a8a;
+        edited => {
+            if (self.text.is-float()) {
+                root.value = clamp(self.text.to-float().round(), root.minimum, root.maximum);
+                root.changed();
+            }
+        }
+        accepted => { self.text = root.value; }
+    }
+    Rectangle {
+        x: parent.width - 17px;
+        width: 17px;
+        height: parent.height / 2;
+        background: up.pressed ? #cfe0f5 : #f0f0f0;
+        border-width: 1px;
+        border-color: #a0a0a0;
+        Text { text: "▲"; font-size: 7px; color: root.enabled ? #333333 : #a0a0a0; horizontal-alignment: center; vertical-alignment: center; }
+        up := TouchArea {
+            enabled: root.enabled && root.value < root.maximum;
+            clicked => {
+                root.value += 1;
+                input.text = root.value;
+                root.changed();
+            }
+        }
+    }
+    Rectangle {
+        x: parent.width - 17px;
+        y: parent.height / 2;
+        width: 17px;
+        height: parent.height / 2;
+        background: down.pressed ? #cfe0f5 : #f0f0f0;
+        border-width: 1px;
+        border-color: #a0a0a0;
+        Text { text: "▼"; font-size: 7px; color: root.enabled ? #333333 : #a0a0a0; horizontal-alignment: center; vertical-alignment: center; }
+        down := TouchArea {
+            enabled: root.enabled && root.value > root.minimum;
+            clicked => {
+                root.value -= 1;
+                input.text = root.value;
+                root.changed();
+            }
+        }
+    }
+}
+
+// Listbox of plain strings with a selection.
+export component List inherits Rectangle {
+    in property <[string]> model;
+    in-out property <int> current-index: -1;
+    in property <bool> enabled: true;
+    callback selected;
+    background: #ffffff;
+    border-width: 1px;
+    border-color: #7a7a7a;
+    for item[i] in root.model: Rectangle {
+        x: 1px;
+        y: 1px + i * 17px;
+        width: parent.width - 2px;
+        height: 17px;
+        background: i == root.current-index ? Palette.accent-background : transparent;
+        DlgText {
+            x: 4px;
+            height: parent.height;
+            vertical-alignment: center;
+            text: item;
+            color: i == root.current-index ? #ffffff : root.enabled ? #000000 : #8a8a8a;
+        }
+        TouchArea {
+            enabled: root.enabled;
+            clicked => {
+                root.current-index = i;
+                root.selected();
+            }
+        }
+    }
+}
+
+export struct InkLevel {
+    name: string,
+    color: color,
+    // 0..100, or -1 when the printer reports no value
+    level: int,
+}
+
+// Ink meter (EPInkMeterLib, 30x42 DLU): a tank that fills from the bottom.
+export component InkMeter inherits Rectangle {
+    in property <InkLevel> ink;
+    background: #ffffff;
+    border-width: 1px;
+    border-color: #808080;
+    Rectangle {
+        x: 1px;
+        width: parent.width - 2px;
+        height: (parent.height - 2px) * max(root.ink.level, 0) / 100;
+        y: parent.height - 1px - self.height;
+        background: root.ink.color;
+    }
+    if root.ink.level < 0: DlgText {
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "?";
+    }
+}
