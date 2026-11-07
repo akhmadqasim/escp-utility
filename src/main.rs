@@ -1095,6 +1095,10 @@ fn main() -> Result<(), slint::PlatformError> {
         print!("{}", report::run(&queue, &profiles));
         return Ok(());
     }
+    // The platform must exist before the app_id can be set (set_xdg_app_id
+    // fails with NoPlatform otherwise): select it now, as the first window
+    // would (SLINT_BACKEND is honoured).
+    slint::BackendSelector::new().select()?;
     // The Wayland app_id (X11 WM_CLASS) of every window: GNOME matches it to
     // epson-l800-utility.desktop (StartupWMClass), so the sheet and its
     // dialogs group as one app with our icon. Must be set before any window

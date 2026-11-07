@@ -344,6 +344,7 @@ and the pre-check result. It refuses while the queue has jobs.
 ```sh
 cargo build --release
 cargo test
+cargo test -- --ignored   # start-up smoke test: opens a window for 3 s
 ./target/release/epson-l800-utility --dry-run      # safe: writes files, never calls lp
 ./target/release/epson-l800-utility                # live: sends to the Epson CUPS queue
 ```
