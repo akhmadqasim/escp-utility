@@ -12,6 +12,10 @@ mod status;
 #[allow(dead_code)]
 mod printer;
 
+#[path = "../src/settings.rs"]
+#[allow(dead_code)] // printer.rs reads `lpoptions -p` through it
+mod settings;
+
 fn main() {
     let queue = std::env::args().nth(1).unwrap_or_else(|| "L800".into());
     // USB or URI identity; the PPD is not needed for a status query.

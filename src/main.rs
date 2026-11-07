@@ -28,6 +28,7 @@ slint::include_modules!();
 use commands::Timestamp;
 use printer::Identity;
 use profile::Profile;
+use ppd_sheet::strings;
 use settings::Values;
 use status::{CleaningMonitor, Precheck, QueryError, Status, Step};
 use texts::*;
@@ -261,8 +262,6 @@ struct App {
     printer: Identity,
     /// Its profile, or the generic one.
     profile: Profile,
-    /// A profile matched the printer's MDL.
-    profiled: bool,
     main: MainWindow,
     wait: Lazy<WaitDialog>,
     nozzle: Lazy<NozzleCheckDialog>,
@@ -299,10 +298,9 @@ impl App {
     /// maintenance jobs need an ESC/P device ID, and use the generic profile.
     fn new(mode: Mode, printer: Identity, profile: Option<Profile>, sheet: Option<ppd_sheet::Sheet>) -> Result<Rc<App>, slint::PlatformError> {
         let main = MainWindow::new()?;
-        let profiled = profile.is_some();
-        let profile = profile.unwrap_or_else(Profile::generic);
         main.set_queue(printer.queue.clone().into());
-        main.set_maintenance(printer.id.maintenance() || profiled);
+        main.set_maintenance(printer.id.maintenance() || profile.is_some());
+        let profile = profile.unwrap_or_else(Profile::generic);
         main.set_experimental(profile.experimental());
         // Paper Guide Cleaning is the L800's (a no-op there, as on Windows).
         main.set_paper_guide(profile.l800_windows());
@@ -311,7 +309,6 @@ impl App {
             mode,
             printer,
             profile,
-            profiled,
             main,
             wait: Lazy::new(dialogs::wait),
             nozzle: Lazy::new(dialogs::nozzle),
@@ -378,6 +375,24 @@ impl App {
             shown(&self.printer_options),
         ];
         self.main.set_busy(self.settings_io.get() || open.contains(&true));
+    }
+
+    /// An edit on the sheet: Apply is enabled and no preset is selected.
+    fn touched(&self) {
+        let p = self.main.global::<Prefs>();
+        p.set_dirty(true);
+        p.set_preset(-1);
+    }
+
+    /// The defaults on the sheet (PPD defaults, or the L800's).
+    fn show_defaults(&self) {
+        match &self.ppd {
+            Some(st) => {
+                self.ppd_set(st, st.sheet.defaults());
+                ppd_sheet::show_std(&self.main.global::<Prefs>(), &ppd_sheet::Std::default());
+            }
+            None => self.set_prefs(&Values::default()),
+        }
     }
 
     /// Show or hide the Current Settings window (dialog 4050).
@@ -602,9 +617,7 @@ impl App {
         v.magenta = d.get_magenta();
         v.yellow = d.get_yellow();
         self.set_prefs(&v);
-        let p = self.main.global::<Prefs>();
-        p.set_dirty(true);
-        p.set_preset(-1);
+        self.touched();
         self.close(d);
     }
 
@@ -676,8 +689,8 @@ impl App {
         p.set_commit_tick(p.get_commit_tick() + 1);
         let queue = &self.printer.queue;
         let args = match &self.ppd {
-            Some(st) => ppd_sheet::save_args(queue, &st.sheet, &st.sel.borrow(), &ppd_sheet::std_of(&p)),
-            None => settings::save_args(queue, &self.prefs()),
+            Some(st) => settings::save_args(queue, st.sheet.to_options(&st.sel.borrow()).into_iter().chain(ppd_sheet::std_of(&p).to_options())),
+            None => settings::save_args(queue, self.prefs().to_options()),
         };
         if self.dry_run() {
             self.dump.set_caption("Dry run".into());
@@ -1062,7 +1075,7 @@ impl App {
         );
         // lpstat can be slow when cupsd is: keep it off the UI thread.
         let queue = self.printer.queue.clone();
-        let summary = format!("{}{}", self.printer.summary(), self.profile.summary(self.profiled));
+        let summary = format!("{}{}", self.printer.summary(), self.profile.summary());
         bg(move || format!("{summary}\n{}", transport::queue_info(&queue)), |app, text| {
             app.info.set_content(text.into());
             app.open(&app.info);
@@ -1106,10 +1119,6 @@ fn ink_color(code: u8) -> slint::Color {
     slint::Color::from_argb_encoded(0xff00_0000 | rgb)
 }
 
-/// A Slint string list.
-fn strings<'a>(items: impl IntoIterator<Item = &'a str>) -> slint::ModelRc<slint::SharedString> {
-    slint::VecModel::from_slice(&items.into_iter().map(slint::SharedString::from).collect::<Vec<_>>())
-}
 
 /// The Windows labels of each list (settings.rs tables).
 fn fill_lists(p: &Prefs) {
@@ -1256,10 +1265,7 @@ fn main() -> Result<(), slint::PlatformError> {
     app.main.set_dry_run(app.dry_run());
     app.main.set_current_tab(if args.utility { 4 } else { 1 });
     fill_lists(&app.main.global::<Prefs>());
-    match &app.ppd {
-        Some(st) => app.ppd_set(st, st.sheet.defaults()),
-        None => app.set_prefs(&Values::default()),
-    }
+    app.show_defaults();
     // The sheet waits for the load, so no early edit (or OK) is lost to it.
     app.settings_io.set(true);
     app.refresh_busy();
@@ -1385,9 +1391,7 @@ fn wire(ui: &App) {
             if let Some(e) = e {
                 a.ppd_edit(st, &e);
             }
-            let p = a.main.global::<Prefs>();
-            p.set_dirty(true);
-            return p.set_preset(-1);
+            return a.touched();
         }
         let mut v = a.prefs();
         match list.as_str() {
@@ -1397,10 +1401,8 @@ fn wire(ui: &App) {
             "quality" => v.quality = settings::advanced_qualities(v.media).get(row).map_or(v.quality, |q| q.1),
             _ => return,
         }
-        let p = a.main.global::<Prefs>();
         a.set_prefs(&v);
-        p.set_dirty(true);
-        p.set_preset(-1);
+        a.touched();
     });
     prefs.on_open_dialog(|id| {
         if let Some(a) = app() {
@@ -1410,16 +1412,8 @@ fn wire(ui: &App) {
     // Show Settings / Hide Settings toggles the Current Settings window.
     prefs.on_toggle_settings(on(|a| a.show_settings(!a.main.global::<Prefs>().get_settings_shown())));
     prefs.on_reset_defaults(on(|a| {
-        match &a.ppd {
-            Some(st) => {
-                a.ppd_set(st, st.sheet.defaults());
-                ppd_sheet::show_std(&a.main.global::<Prefs>(), &ppd_sheet::Std::default());
-            }
-            None => a.set_prefs(&Values::default()),
-        }
-        let p = a.main.global::<Prefs>();
-        p.set_dirty(true);
-        p.set_preset(-1);
+        a.show_defaults();
+        a.touched();
     }));
     prefs.on_preset_picked(|i| {
         let (Some(a), Some(preset)) = (app(), usize::try_from(i).ok().and_then(|i| settings::PRESETS.get(i))) else { return };
@@ -1468,12 +1462,7 @@ mod dialogs {
 
     pub fn cleaning() -> HeadCleaningDialog {
         let d = make(HeadCleaningDialog::new);
-        d.on_start(|kind| {
-            if let Some(a) = app() {
-                a.cleaning.set_kind(kind);
-                a.cleaning_start();
-            }
-        });
+        d.on_start(on(|a| a.cleaning_start()));
         d.on_cancel(on(|a| a.close(&a.cleaning)));
         d
     }
@@ -1589,9 +1578,7 @@ mod dialogs {
             if let Some(e) = e {
                 a.ppd_edit(st, &e);
                 a.printer_options.set_rows(slint::VecModel::from_slice(&ppd_sheet::option_rows(&st.view.borrow())));
-                let p = a.main.global::<Prefs>();
-                p.set_dirty(true);
-                p.set_preset(-1);
+                a.touched();
             }
         });
         d.on_ok(on(|a| a.close(&a.printer_options)));

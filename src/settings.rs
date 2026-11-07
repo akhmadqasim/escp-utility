@@ -306,7 +306,6 @@ impl Values {
     /// and `lpoptions -p Q` (destination options such as `copies`).
     pub fn parse(ppd_listing: &str, dest: &str) -> Values {
         let ppd = parse_ppd_listing(ppd_listing);
-        let opts = parse_dest_options(dest);
         let mut v = Values::default();
         let get = |k: &str| ppd.get(k).map(String::as_str);
         let pick = |list: &[Choice], k: &str, d: usize| get(k).and_then(|x| index_of(list, x)).unwrap_or(d);
@@ -338,16 +337,11 @@ impl Values {
         v.magenta = level("MagentaValue");
         v.yellow = level("YellowValue");
 
-        let o = |k: &str| opts.get(k).map(String::as_str);
-        v.landscape = matches!(o("orientation-requested"), Some("4") | Some("5"));
-        v.reverse = o("outputorder") == Some("reverse");
-        let up = o("number-up").and_then(|n| n.parse::<u32>().ok());
-        if let Some(i) = up.and_then(|n| PAGES_PER_SHEET.iter().position(|p| *p == n)).filter(|_| !v.poster) {
-            (v.multi_page, v.pages_index) = (true, i);
+        let std = Std::parse(dest);
+        (v.landscape, v.reverse, v.page_borders, v.copies, v.collate) = (std.landscape, std.reverse, std.page_borders, std.copies, std.collate);
+        if std.multi_page && !v.poster {
+            (v.multi_page, v.pages_index) = (true, std.pages_index);
         }
-        v.page_borders = matches!(o("page-border"), Some(b) if b != "none");
-        v.copies = o("copies").and_then(|n| n.parse().ok()).filter(|n| (1..=9999).contains(n)).unwrap_or(1);
-        v.collate = o("collate") == Some("true");
         v
     }
 
@@ -384,17 +378,72 @@ impl Values {
             ("CyanValue", s.cyan.to_string()),
             ("MagentaValue", s.magenta.to_string()),
             ("YellowValue", s.yellow.to_string()),
-            ("orientation-requested", if s.landscape { "4" } else { "3" }.into()),
-            ("outputorder", if s.reverse { "reverse" } else { "normal" }.into()),
-            (
-                "number-up",
-                if s.multi_page && !s.poster { PAGES_PER_SHEET[s.pages_index] } else { 1 }.to_string(),
-            ),
-            ("page-border", if s.multi_page && !s.poster && s.page_borders { "single" } else { "none" }.into()),
-            ("copies", s.copies.to_string()),
-            ("collate", s.collate.to_string()),
         ];
-        o.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+        // The CUPS options; Poster Printing is not Pages per Sheet.
+        let std = Std {
+            landscape: s.landscape,
+            reverse: s.reverse,
+            multi_page: s.multi_page && !s.poster,
+            pages_index: s.pages_index,
+            page_borders: s.page_borders,
+            copies: s.copies,
+            collate: s.collate,
+        };
+        o.into_iter().map(|(k, v)| (k.to_string(), v)).chain(std.to_options()).collect()
+    }
+}
+
+/// The CUPS job options every queue has (orientation, order, pages per
+/// sheet, copies): the L800 sheet and the PPD sheets save them alike.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Std {
+    pub landscape: bool,
+    pub reverse: bool,
+    pub multi_page: bool,
+    /// Index into `PAGES_PER_SHEET`.
+    pub pages_index: usize,
+    pub page_borders: bool,
+    pub copies: u32,
+    pub collate: bool,
+}
+
+impl Default for Std {
+    fn default() -> Self {
+        Std { landscape: false, reverse: false, multi_page: false, pages_index: 0, page_borders: false, copies: 1, collate: false }
+    }
+}
+
+impl Std {
+    /// From `lpoptions -p Q` (destination options).
+    pub fn parse(dest: &str) -> Std {
+        let opts: BTreeMap<String, String> = parse_dest_options(dest);
+        let o = |k: &str| opts.get(k).map(String::as_str);
+        let up = o("number-up").and_then(|n| n.parse::<u32>().ok());
+        let pages = up.and_then(|n| PAGES_PER_SHEET.iter().position(|p| *p == n));
+        Std {
+            landscape: matches!(o("orientation-requested"), Some("4") | Some("5")),
+            reverse: o("outputorder") == Some("reverse"),
+            multi_page: pages.is_some(),
+            pages_index: pages.unwrap_or(0),
+            page_borders: matches!(o("page-border"), Some(b) if b != "none"),
+            copies: o("copies").and_then(|n| n.parse().ok()).filter(|n| (1..=9999).contains(n)).unwrap_or(1),
+            collate: o("collate") == Some("true"),
+        }
+    }
+
+    pub fn to_options(&self) -> Vec<(String, String)> {
+        let up = if self.multi_page { PAGES_PER_SHEET[self.pages_index] } else { 1 };
+        [
+            ("orientation-requested", if self.landscape { "4" } else { "3" }.to_string()),
+            ("outputorder", if self.reverse { "reverse" } else { "normal" }.to_string()),
+            ("number-up", up.to_string()),
+            ("page-border", if self.multi_page && self.page_borders { "single" } else { "none" }.to_string()),
+            ("copies", self.copies.to_string()),
+            ("collate", self.collate.to_string()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect()
     }
 }
 
@@ -448,7 +497,7 @@ pub fn parse_dest_options(text: &str) -> BTreeMap<String, String> {
     m
 }
 
-fn lpoptions(args: &[&str]) -> Result<String, String> {
+pub fn lpoptions(args: &[&str]) -> Result<String, String> {
     let o = Command::new("lpoptions").env("LC_ALL", "C").args(args).output().map_err(|e| format!("Cannot run lpoptions: {e}"))?;
     if !o.status.success() {
         return Err(format!("lpoptions {}: {}", args.join(" "), String::from_utf8_lossy(&o.stderr).trim()));
@@ -462,17 +511,19 @@ pub fn load_raw(queue: &str) -> Result<(String, String), String> {
     Ok((lpoptions(&["-p", queue, "-l"])?, lpoptions(&["-p", queue])?))
 }
 
-/// The command that saves `v` for this user (written to ~/.cups/lpoptions).
-pub fn save_args(queue: &str, v: &Values) -> Vec<String> {
+/// The command that saves `options` for this user (written to
+/// ~/.cups/lpoptions): `Values::to_options`, or a PPD sheet's options
+/// followed by its `Std` ones.
+pub fn save_args(queue: &str, options: impl IntoIterator<Item = (String, String)>) -> Vec<String> {
     let mut args = vec!["-p".to_string(), queue.to_string()];
-    for (k, val) in v.to_options() {
+    for (k, val) in options {
         args.push("-o".into());
         args.push(format!("{k}={val}"));
     }
     args
 }
 
-/// Run `lpoptions` with save arguments (`save_args`, `ppd_sheet::save_args`).
+/// Run `lpoptions` with save arguments (`save_args`).
 pub fn save(args: &[String]) -> Result<(), String> {
     lpoptions(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(|_| ())
 }
@@ -696,7 +747,7 @@ YellowValue/Yellow: -25 *0 25
 
     #[test]
     fn save_args_use_lpoptions_o() {
-        let a = save_args("L800", &Values::default());
+        let a = save_args("L800", Values::default().to_options());
         assert_eq!(&a[..4], &["-p", "L800", "-o", "PrintQuality=Text"]);
         assert!(a.contains(&"orientation-requested=3".to_string()));
     }

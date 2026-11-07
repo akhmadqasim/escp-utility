@@ -106,33 +106,8 @@ pub fn queues(queue: Option<&str>) -> Vec<Queue> {
 
 /// `printer-make-and-model` from `lpoptions -p QUEUE`, or "".
 pub fn make_model(queue: &str) -> String {
-    let out = Command::new("lpoptions").env("LC_ALL", "C").args(["-p", queue]).output();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-    lpoptions_value(&text, "printer-make-and-model").unwrap_or_default()
-}
-
-/// One `key=value` of `lpoptions -p` output; values with spaces are quoted
-/// ('...' or "..."), and a backslash escapes the next character.
-pub fn lpoptions_value(text: &str, key: &str) -> Option<String> {
-    let mut chars = text.chars().peekable();
-    loop {
-        while chars.next_if(|c| c.is_whitespace()).is_some() {}
-        chars.peek()?;
-        let mut token = String::new();
-        let mut quote = None;
-        while let Some(c) = chars.next() {
-            match (c, quote) {
-                ('\\', _) => token.extend(chars.next()),
-                (c, None) if c.is_whitespace() => break,
-                ('\'' | '"', None) => quote = Some(c),
-                (c, Some(q)) if c == q => quote = None,
-                (c, _) => token.push(c),
-            }
-        }
-        if let Some(v) = token.strip_prefix(key).and_then(|r| r.strip_prefix('=')) {
-            return Some(v.to_string());
-        }
-    }
+    let text = crate::settings::lpoptions(&["-p", queue]).unwrap_or_default();
+    crate::settings::parse_dest_options(&text).remove("printer-make-and-model").unwrap_or_default()
 }
 
 /// An Epson printer: by its device URI or its make and model.
@@ -341,18 +316,6 @@ mod tests {
         assert_eq!(uri_device_id(&q[0].uri).unwrap().mdl(), Some("L800"));
         assert_eq!(uri_device_id("usb://EPSON/ET-2750%20Series?serial=X&interface=1").unwrap().mdl(), Some("ET-2750 Series"));
         assert_eq!(uri_device_id(&q[1].uri), None);
-    }
-
-    #[test]
-    fn lpoptions_values() {
-        let text = "copies=1 device-uri=usb://EPSON/L800?serial=1234567X8901234567 printer-info=L800 printer-location printer-make-and-model='Epson L800 Series - epson-inkjet-printer 1.0.2-1 (Seiko Epson Corporation)' printer-state=3\n";
-        assert_eq!(
-            lpoptions_value(text, "printer-make-and-model").as_deref(),
-            Some("Epson L800 Series - epson-inkjet-printer 1.0.2-1 (Seiko Epson Corporation)")
-        );
-        assert_eq!(lpoptions_value(text, "printer-state").as_deref(), Some("3"));
-        assert_eq!(lpoptions_value(text, "printer"), None);
-        assert_eq!(lpoptions_value(r"a=it\'s b='x y'", "a").as_deref(), Some("it's"));
     }
 
     /// A fake /sys/class/usbmisc: lp0 is another printer, lp3 the L800.

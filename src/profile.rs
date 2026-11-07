@@ -50,9 +50,9 @@ impl Profile {
     }
 
     /// The profile lines of Printer and Option Information and `--report`.
-    /// `profiled`: it matched the printer (else it is the generic one).
-    pub fn summary(&self, profiled: bool) -> String {
-        let name = if profiled { format!("{} (Windows family \"{}\")", self.mdl, self.windows_family) } else { "generic".into() };
+    /// Only the generic profile has no MDL (`lint` rejects an empty one).
+    pub fn summary(&self) -> String {
+        let name = if !self.mdl.is_empty() { format!("{} (Windows family \"{}\")", self.mdl, self.windows_family) } else { "generic".into() };
         let tested = if self.experimental() { "Experimental: not yet tested on this model.".to_string() } else { format!("Tested: {}", self.tested) };
         let cleaning: Vec<String> = self.cleaning.iter().map(|c| format!("{} (CH {:02X})", c.label, c.ch)).collect();
         format!("Profile: {name}\n{tested}\nNozzle check: NC {:02X}; cleaning: {}\n", self.nc_param, cleaning.join(", "))

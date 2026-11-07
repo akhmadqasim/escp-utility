@@ -14,9 +14,8 @@
 //! takes are listed in the Advanced "Printer Options..." dialog. Lists show
 //! only the choices the PPD's constraints allow with the other values.
 
-use std::collections::BTreeMap;
-
 use crate::ppd::{Ppd, Selection, Slot, SlotMap};
+pub use crate::settings::Std;
 
 /// escpr quality suffixes, low to high; index = Main quality radio. The
 /// fifth radio (Best Photo) has no level.
@@ -399,8 +398,9 @@ impl Sheet {
 // The pages: the `Prefs` global shows a view, and a change on it is read
 // back as an edit.
 
-fn strings<S: AsRef<str>>(items: &[S]) -> slint::ModelRc<slint::SharedString> {
-    slint::ModelRc::new(slint::VecModel::from(items.iter().map(|s| s.as_ref().into()).collect::<Vec<slint::SharedString>>()))
+/// A Slint string list.
+pub fn strings<S: AsRef<str>>(items: impl IntoIterator<Item = S>) -> slint::ModelRc<slint::SharedString> {
+    slint::VecModel::from_slice(&items.into_iter().map(|s| s.as_ref().into()).collect::<Vec<slint::SharedString>>())
 }
 
 /// Show `v` on the pages.
@@ -410,17 +410,17 @@ pub fn show(p: &crate::Prefs, v: &View) {
     p.set_quality_labels(strings(&v.quality_labels));
     p.set_quality_enabled(slint::ModelRc::new(slint::VecModel::from(v.quality_enabled.clone())));
     p.set_has_quality(v.adv_quality.present);
-    p.set_adv_quality_labels(strings(&v.adv_quality.labels()));
+    p.set_adv_quality_labels(strings(v.adv_quality.labels()));
     p.set_adv_quality_pos(v.adv_quality.pos as i32);
     p.set_has_source(v.source.present);
-    p.set_source_labels(strings(&v.source.labels()));
+    p.set_source_labels(strings(v.source.labels()));
     p.set_source(v.source.pos as i32);
     p.set_has_media(v.media.present);
-    p.set_media_labels(strings(&v.media.labels()));
+    p.set_media_labels(strings(v.media.labels()));
     p.set_media_pos(v.media.pos as i32);
     p.set_media(v.media.pos as i32);
     p.set_has_size(v.size.present);
-    p.set_size_labels(strings(&v.size.labels()));
+    p.set_size_labels(strings(v.size.labels()));
     p.set_size_pos(v.size.pos as i32);
     p.set_size(v.size.pos as i32);
     p.set_borderless(v.borderless);
@@ -428,10 +428,10 @@ pub fn show(p: &crate::Prefs, v: &View) {
     p.set_has_grayscale(v.grayscale.is_some());
     p.set_grayscale(v.grayscale.unwrap_or(false));
     p.set_has_color_mode(v.color_mode.present);
-    p.set_color_mode_labels(strings(&v.color_mode.labels()));
+    p.set_color_mode_labels(strings(v.color_mode.labels()));
     p.set_color_mode(v.color_mode.pos as i32);
     p.set_has_gamma(v.gamma.present);
-    p.set_gamma_labels(strings(&v.gamma.labels()));
+    p.set_gamma_labels(strings(v.gamma.labels()));
     p.set_gamma(v.gamma.pos as i32);
     p.set_has_color_controls(v.color_mode.present || v.gamma.present || v.levels.iter().any(Option::is_some));
     let l = v.levels.map(|l| l.unwrap_or(0));
@@ -472,7 +472,7 @@ pub fn std_of(p: &crate::Prefs) -> Std {
 pub fn option_rows(v: &View) -> Vec<crate::OptionRow> {
     v.leftovers
         .iter()
-        .map(|(_, label, f)| crate::OptionRow { label: label.into(), choices: strings(&f.labels()), index: f.pos as i32 })
+        .map(|(_, label, f)| crate::OptionRow { label: label.into(), choices: strings(f.labels()), index: f.pos as i32 })
         .collect()
 }
 
@@ -540,70 +540,6 @@ impl Sheet {
         }
         out
     }
-}
-
-/// The CUPS job options every queue has (orientation, order, pages per
-/// sheet, copies), as the L800 sheet saves them.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Std {
-    pub landscape: bool,
-    pub reverse: bool,
-    pub multi_page: bool,
-    /// Index into `settings::PAGES_PER_SHEET`.
-    pub pages_index: usize,
-    pub page_borders: bool,
-    pub copies: u32,
-    pub collate: bool,
-}
-
-impl Default for Std {
-    fn default() -> Self {
-        Std { landscape: false, reverse: false, multi_page: false, pages_index: 0, page_borders: false, copies: 1, collate: false }
-    }
-}
-
-impl Std {
-    /// From `lpoptions -p Q` (destination options).
-    pub fn parse(dest: &str) -> Std {
-        let opts: BTreeMap<String, String> = crate::settings::parse_dest_options(dest);
-        let o = |k: &str| opts.get(k).map(String::as_str);
-        let up = o("number-up").and_then(|n| n.parse::<u32>().ok());
-        let pages = up.and_then(|n| crate::settings::PAGES_PER_SHEET.iter().position(|p| *p == n));
-        Std {
-            landscape: matches!(o("orientation-requested"), Some("4") | Some("5")),
-            reverse: o("outputorder") == Some("reverse"),
-            multi_page: pages.is_some(),
-            pages_index: pages.unwrap_or(0),
-            page_borders: matches!(o("page-border"), Some(b) if b != "none"),
-            copies: o("copies").and_then(|n| n.parse().ok()).filter(|n| (1..=9999).contains(n)).unwrap_or(1),
-            collate: o("collate") == Some("true"),
-        }
-    }
-
-    pub fn to_options(&self) -> Vec<(String, String)> {
-        let up = if self.multi_page { crate::settings::PAGES_PER_SHEET[self.pages_index] } else { 1 };
-        [
-            ("orientation-requested", if self.landscape { "4" } else { "3" }.to_string()),
-            ("outputorder", if self.reverse { "reverse" } else { "normal" }.to_string()),
-            ("number-up", up.to_string()),
-            ("page-border", if self.multi_page && self.page_borders { "single" } else { "none" }.to_string()),
-            ("copies", self.copies.to_string()),
-            ("collate", self.collate.to_string()),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect()
-    }
-}
-
-/// The `lpoptions` arguments that save a PPD sheet.
-pub fn save_args(queue: &str, sheet: &Sheet, sel: &Selection, std: &Std) -> Vec<String> {
-    let mut args = vec!["-p".to_string(), queue.to_string()];
-    for (k, v) in sheet.to_options(sel).into_iter().chain(std.to_options()) {
-        args.push("-o".into());
-        args.push(format!("{k}={v}"));
-    }
-    args
 }
 
 #[cfg(test)]
@@ -692,7 +628,7 @@ mod tests {
         sel = s.apply(&s.apply(&sel, &Edit::Borderless(false)), &Edit::Media(0));
         assert_eq!((sel["MediaType"].as_str(), sel["PageSize"].as_str()), ("PLAIN_HIGH", "4X6FULL"));
         round_trip(&s, &sel);
-        let args = save_args("L805", &s, &sel, &Std::default());
+        let args = crate::settings::save_args("L805", s.to_options(&sel).into_iter().chain(Std::default().to_options()));
         assert!(args.contains(&"MediaType=PLAIN_HIGH".to_string()) && args.contains(&"copies=1".to_string()), "{args:?}");
     }
 
