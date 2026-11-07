@@ -85,12 +85,10 @@ pub fn query(queue: &str) -> Result<Status, QueryError> {
     if jobs_queued(queue) {
         return Err(QueryError::Busy);
     }
-    let fail = |e: String| QueryError::Failed(e);
+    let fail = QueryError::Failed;
     let path = usblp::find_lp("L800").ok_or_else(|| fail("no /dev/usb/lp* for the L800".into()))?;
     let port = usblp::UsbLp::open(&path).map_err(|e| fail(format!("{}: {e}", path.display())))?;
-    let mut session = d4::Session::new(port);
-    session.timeout = Duration::from_secs(2);
-    let raw = session.query().map_err(|e| fail(e.to_string()))?;
+    let raw = d4::Session::new(port).query().map_err(|e| fail(e.to_string()))?;
     Status::from_reply(&raw).ok_or_else(|| fail("reply is not @BDC ST2".into()))
 }
 
@@ -210,7 +208,7 @@ fn low_inks(s: &Status) -> String {
 /// without a start (about 32 s) or 3 failed reads in a row.
 #[derive(Debug, Default)]
 pub struct CleaningMonitor {
-    pub started_secs: Option<u16>,
+    started_secs: Option<u16>,
     polls_without_start: u32,
     not_cleaning: u32,
     failures: u32,
@@ -244,7 +242,7 @@ impl CleaningMonitor {
                 if self.failures >= 3 {
                     return Step::GaveUp;
                 }
-                return if self.started_secs.is_some() { Step::Running } else { self.no_start() };
+                return self.no_start();
             }
         };
         let cleaning = s.st == Some(0x07);

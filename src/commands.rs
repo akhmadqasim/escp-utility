@@ -132,22 +132,23 @@ impl Cleaning {
 /// 0x109, 0x108, 0x109, 0x108, 0x100, 0x10a, 0x10b, 0x101, 0x103, end,
 /// then the job-end trailer.
 pub fn nozzle_check_job(ts: Timestamp) -> Vec<u8> {
-    let mut v = Vec::with_capacity(128);
-    v.extend_from_slice(EXIT_PACKET_MODE);
-    v.extend_from_slice(RESET_TWICE);
-    v.extend_from_slice(ENTER_REMOTE);
-    v.extend_from_slice(&ts.ti_command());
-    v.extend_from_slice(JOB_START);
-    v.extend_from_slice(NOZZLE_CHECK);
-    v.extend_from_slice(EXIT_REMOTE);
-    v.extend_from_slice(b"\r\n\r\n");
-    v.extend_from_slice(ENTER_REMOTE);
-    v.extend_from_slice(VI);
-    v.extend_from_slice(LD);
-    v.extend_from_slice(EXIT_REMOTE);
-    v.extend_from_slice(FORM_FEED);
-    v.extend_from_slice(JOB_END_TRAILER);
-    v
+    [
+        EXIT_PACKET_MODE,
+        RESET_TWICE,
+        ENTER_REMOTE,
+        &ts.ti_command(),
+        JOB_START,
+        NOZZLE_CHECK,
+        EXIT_REMOTE,
+        b"\r\n\r\n",
+        ENTER_REMOTE,
+        VI,
+        LD,
+        EXIT_REMOTE,
+        FORM_FEED,
+        JOB_END_TRAILER,
+    ]
+    .concat()
 }
 
 /// Head cleaning job, `E_IHBRG5P` RT_RCDATA 1802 (7 records):
@@ -156,15 +157,7 @@ pub fn nozzle_check_job(ts: Timestamp) -> Vec<u8> {
 pub fn head_cleaning_job(kind: Cleaning, ts: Timestamp) -> Vec<u8> {
     let mut ch = HEAD_CLEANING;
     ch[5] = kind.type_byte();
-    let mut v = Vec::with_capacity(80);
-    v.extend_from_slice(EXIT_PACKET_MODE);
-    v.extend_from_slice(RESET_TWICE);
-    v.extend_from_slice(ENTER_REMOTE);
-    v.extend_from_slice(&ts.ti_command());
-    v.extend_from_slice(&ch);
-    v.extend_from_slice(EXIT_REMOTE);
-    v.extend_from_slice(JOB_END_TRAILER);
-    v
+    [EXIT_PACKET_MODE, RESET_TWICE, ENTER_REMOTE, &ts.ti_command(), &ch, EXIT_REMOTE, JOB_END_TRAILER].concat()
 }
 
 /// Classic 16-bytes-per-line hexdump with an ASCII column.

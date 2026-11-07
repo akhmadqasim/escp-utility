@@ -44,8 +44,8 @@ pub fn close_channel(sid: u8) -> [u8; 10] {
 }
 /// Data packet on `sid`: credit 0, control 1 (end of message).
 pub fn data_packet(sid: u8, payload: &[u8]) -> Vec<u8> {
-    let len = (payload.len() + 6) as u16;
-    let mut v = vec![sid, sid, (len >> 8) as u8, len as u8, 0x00, 0x01];
+    let [h, l] = ((payload.len() + 6) as u16).to_be_bytes();
+    let mut v = vec![sid, sid, h, l, 0x00, 0x01];
     v.extend_from_slice(payload);
     v
 }
@@ -59,9 +59,6 @@ pub trait Port {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Packet {
     pub psid: u8,
-    pub ssid: u8,
-    pub credit: u8,
-    pub control: u8,
     /// Whole packet, header included.
     pub raw: Vec<u8>,
 }
@@ -103,7 +100,7 @@ impl<P: Port> Session<P> {
             entered: false,
             channel_open: false,
             tx_credit: 0,
-            timeout: Duration::from_secs(5),
+            timeout: Duration::from_secs(2),
         }
     }
 
@@ -112,7 +109,7 @@ impl<P: Port> Session<P> {
     }
 
     /// Read and discard stale bytes (ecbd `DummyRead_Fnc`).
-    pub fn drain(&mut self) -> io::Result<usize> {
+    pub fn drain(&mut self) -> io::Result<()> {
         let mut total = 0;
         let mut buf = [0u8; 1024];
         loop {
@@ -125,31 +122,22 @@ impl<P: Port> Session<P> {
                 return Err(err("drain: device keeps sending"));
             }
         }
-        Ok(total)
+        Ok(())
     }
 
     /// Next whole packet from the wire, or None on timeout.
     fn next_packet(&mut self, deadline: Instant) -> io::Result<Option<Packet>> {
         loop {
             // Resync: a 1284.4 header never has length < 6. Drop junk bytes.
-            while self.rx.len() >= 4 {
-                let len = ((self.rx[2] as usize) << 8) | self.rx[3] as usize;
-                if len >= 6 {
-                    break;
-                }
+            let len = |rx: &[u8]| usize::from(u16::from_be_bytes([rx[2], rx[3]]));
+            while self.rx.len() >= 4 && len(&self.rx) < 6 {
                 self.rx.remove(0);
             }
             if self.rx.len() >= 6 {
-                let len = ((self.rx[2] as usize) << 8) | self.rx[3] as usize;
-                if self.rx.len() >= len {
-                    let raw: Vec<u8> = self.rx.drain(..len).collect();
-                    return Ok(Some(Packet {
-                        psid: raw[0],
-                        ssid: raw[1],
-                        credit: raw[4],
-                        control: raw[5],
-                        raw,
-                    }));
+                let n = len(&self.rx);
+                if self.rx.len() >= n {
+                    let raw: Vec<u8> = self.rx.drain(..n).collect();
+                    return Ok(Some(Packet { psid: raw[0], raw }));
                 }
             }
             let left = deadline.saturating_duration_since(Instant::now());
@@ -413,16 +401,12 @@ pub mod mock {
 
 #[cfg(test)]
 mod tests {
+    use super::super::st2;
     use super::mock::MockPrinter;
     use super::*;
 
     fn st2_sample() -> Vec<u8> {
-        let mut p = vec![0x01, 0x01, 0x04, 0x0F, 0x04, 0x03, 0x0B, 0x00, 0x2A];
-        p.extend([0x40, 0x02, b'Z', b'Z']);
-        let mut r = super::super::st2::HEADER.to_vec();
-        r.extend((p.len() as u16).to_le_bytes());
-        r.extend(p);
-        r
+        st2::tests::sample(0x04, &[0x0F, 0x04, 0x03, 0x0B, 0x00, 0x2A, 0x40, 0x02, b'Z', b'Z'])
     }
 
     /// Printer replies exactly as captured with usbmon on the live L800
@@ -454,7 +438,7 @@ mod tests {
 
     #[test]
     fn replays_live_l800_session() {
-        let live = super::super::st2::tests::live();
+        let live = st2::tests::live();
         let mut s = Session::new(MockPrinter::new(script_with(live.clone())));
         let reply = s.query().unwrap();
         assert_eq!(reply, live);
@@ -477,8 +461,8 @@ mod tests {
         let mut s = Session::new(MockPrinter::new(script()));
         let reply = s.query().unwrap();
         assert_eq!(reply, st2_sample());
-        let r = super::super::st2::parse(&reply).unwrap();
-        assert_eq!(r.get(super::super::st2::id::ST), Some(&[4][..]));
+        let r = st2::parse(&reply).unwrap();
+        assert_eq!(r.get(st2::id::ST), Some(&[4][..]));
         let writes = &s.port.writes;
         assert_eq!(writes[0], ENTER.to_vec());
         assert_eq!(writes[1], INIT.to_vec());

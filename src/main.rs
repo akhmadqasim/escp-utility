@@ -74,7 +74,7 @@ impl Utility {
 /// Why a job was not sent.
 enum Fail {
     /// Dialog 270 with [Details] (status said ST=00).
-    Problem(String),
+    Problem,
     /// Dialog 271.
     Plain(String),
 }
@@ -87,12 +87,26 @@ thread_local! {
     static APP: RefCell<Weak<App>> = const { RefCell::new(Weak::new()) };
 }
 
+/// The app, while it is alive (UI thread only).
+fn app() -> Option<Rc<App>> {
+    APP.with(|a| a.borrow().upgrade())
+}
+
+/// A callback or timer handler that runs `f` with the app.
+fn on(f: fn(&Rc<App>)) -> impl Fn() + 'static {
+    move || {
+        if let Some(a) = app() {
+            f(&a)
+        }
+    }
+}
+
 /// Run `work` on a thread, then `then` on the UI thread with its result.
 fn bg<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static, then: fn(&Rc<App>, T)) {
     std::thread::spawn(move || {
         let value = work();
         let _ = slint::invoke_from_event_loop(move || {
-            if let Some(app) = APP.with(|a| a.borrow().upgrade()) {
+            if let Some(app) = app() {
                 then(&app, value);
             }
         });
@@ -113,7 +127,6 @@ fn at_least_min_wait<T>(f: impl FnOnce() -> T) -> T {
 #[derive(Default)]
 struct Progress {
     monitor: CleaningMonitor,
-    started_at: Option<Instant>,
     in_flight: bool,
 }
 
@@ -262,18 +275,17 @@ impl App {
             move || {
                 let res = at_least_min_wait(|| {
                     if have_status && matches!(status::query(&queue), Ok(Status { st: Some(0x00), .. })) {
-                        return Err(Fail::Problem(COMM_ERROR.into()));
+                        return Err(Fail::Problem);
                     }
-                    match (transport::queue_problem(&queue), &mode) {
-                        (Some(p), Mode::Live) => Err(Fail::Plain(format!("{COMM_ERROR}\n\n{p}"))),
-                        (Some(p), Mode::DryRun(_)) => transport::submit(&mode, &queue, name, &bytes)
-                            .map(|mut s| {
-                                s.summary.push_str(&format!("\nA real run would stop here with a communication error: {p}"));
-                                s
-                            })
-                            .map_err(Fail::Plain),
-                        (None, _) => transport::submit(&mode, &queue, name, &bytes).map_err(Fail::Plain),
+                    let problem = transport::queue_problem(&queue);
+                    if let (Some(p), Mode::Live) = (&problem, &mode) {
+                        return Err(Fail::Plain(format!("{COMM_ERROR}\n\n{p}")));
                     }
+                    let mut sent = transport::submit(&mode, &queue, name, &bytes).map_err(Fail::Plain)?;
+                    if let Some(p) = problem {
+                        sent.summary.push_str(&format!("\nA real run would stop here with a communication error: {p}"));
+                    }
+                    Ok(sent)
                 });
                 (then, res)
             },
@@ -288,23 +300,18 @@ impl App {
 
     fn start_progress(&self) {
         *self.progress_state.borrow_mut() = Progress::default();
+        self.bar_timer.stop();
         self.progress.set_body("Please wait...".into());
         self.progress.set_bar_visible(false);
         self.progress.set_value(0.0);
         let _ = self.progress.show();
-        self.poll_timer.start(TimerMode::Repeated, status::POLL, || {
-            if let Some(app) = APP.with(|a| a.borrow().upgrade()) {
-                app.poll_cleaning();
-            }
-        });
+        self.poll_timer.start(TimerMode::Repeated, status::POLL, on(|a| a.poll_cleaning()));
     }
 
     fn poll_cleaning(&self) {
-        let mut p = self.progress_state.borrow_mut();
-        if p.in_flight {
+        if std::mem::replace(&mut self.progress_state.borrow_mut().in_flight, true) {
             return;
         }
-        p.in_flight = true;
         let queue = self.queue.clone();
         bg(move || status::query(&queue), |app, res| app.on_cleaning_poll(res));
     }
@@ -317,16 +324,13 @@ impl App {
         };
         match step {
             Step::Waiting | Step::Running => {}
-            Step::Started(_) => {
-                self.progress_state.borrow_mut().started_at = Some(Instant::now());
+            Step::Started(secs) => {
+                let at = Instant::now();
                 self.progress.set_body(CLEANING_NOW.into());
                 self.progress.set_bar_visible(true);
-                self.bar_timer.start(TimerMode::Repeated, Duration::from_secs(1), || {
-                    if let Some(app) = APP.with(|a| a.borrow().upgrade()) {
-                        let p = app.progress_state.borrow();
-                        if let (Some(at), Some(secs)) = (p.started_at, p.monitor.started_secs) {
-                            app.progress.set_value(status::progress(at.elapsed(), secs));
-                        }
+                self.bar_timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
+                    if let Some(app) = app() {
+                        app.progress.set_value(status::progress(at.elapsed(), secs));
                     }
                 });
             }
@@ -334,12 +338,13 @@ impl App {
                 self.poll_timer.stop();
                 self.bar_timer.stop();
                 self.progress.set_value(1.0);
-                Timer::single_shot(Duration::from_millis(500), || {
-                    if let Some(app) = APP.with(|a| a.borrow().upgrade()) {
-                        let _ = app.progress.hide();
-                        app.show_done(true);
-                    }
-                });
+                Timer::single_shot(
+                    Duration::from_millis(500),
+                    on(|a| {
+                        let _ = a.progress.hide();
+                        a.show_done(true);
+                    }),
+                );
             }
             Step::GaveUp => {
                 self.poll_timer.stop();
@@ -359,7 +364,7 @@ impl App {
 
     fn show_fail(&self, u: Utility, f: Fail) {
         match f {
-            Fail::Problem(text) => self.show_message(u, &text, SEE_DETAILS, true),
+            Fail::Problem => self.show_message(u, COMM_ERROR, SEE_DETAILS, true),
             // Headings: E_IHSRG5P 1128 / 1129.
             Fail::Plain(detail) => self.show_message(
                 u,
@@ -391,11 +396,7 @@ impl App {
         self.monitor.set_body("".into());
         let _ = self.monitor.show();
         self.poll_monitor();
-        self.monitor_timer.start(TimerMode::Repeated, MONITOR_POLL, || {
-            if let Some(app) = APP.with(|a| a.borrow().upgrade()) {
-                app.poll_monitor();
-            }
-        });
+        self.monitor_timer.start(TimerMode::Repeated, MONITOR_POLL, on(|a| a.poll_monitor()));
     }
 
     fn poll_monitor(&self) {
@@ -424,7 +425,7 @@ impl App {
                         level: i.percent().map_or(-1, i32::from),
                     })
                     .collect();
-                self.monitor.set_inks(std::rc::Rc::new(slint::VecModel::from(inks)).into());
+                self.monitor.set_inks(slint::VecModel::from_slice(&inks));
             }
             // CUPS has jobs: keep the last reading, say it is printing.
             Err(QueryError::Busy) => {
@@ -519,18 +520,12 @@ fn main() -> Result<(), slint::PlatformError> {
             std::process::exit(2);
         }
     };
-    let mode = match args.dump_dir {
-        Some(dir) => Mode::DryRun(dir),
-        None => Mode::Live,
-    };
-
     let main = MainWindow::new()?;
     main.set_queue(args.queue.clone().into());
-    main.set_dry_run(matches!(mode, Mode::DryRun(_)));
     main.set_version_text(env!("CARGO_PKG_VERSION").into());
 
     let app = Rc::new(App {
-        mode,
+        mode: args.dump_dir.map_or(Mode::Live, Mode::DryRun),
         queue: args.queue,
         main,
         wait: WaitDialog::new()?,
@@ -552,6 +547,7 @@ fn main() -> Result<(), slint::PlatformError> {
         monitor_in_flight: Cell::new(false),
     });
     APP.with(|a| *a.borrow_mut() = Rc::downgrade(&app));
+    app.main.set_dry_run(app.dry_run());
     app.dump.set_monospace(true);
     wire(&app);
 
@@ -559,20 +555,10 @@ fn main() -> Result<(), slint::PlatformError> {
     slint::run_event_loop()
 }
 
-/// Connect every callback. Handlers hold a weak reference to the app.
-fn wire(app: &Rc<App>) {
-    let on = |f: fn(&Rc<App>)| {
-        let w = Rc::downgrade(app);
-        move || {
-            if let Some(a) = w.upgrade() {
-                f(&a)
-            }
-        }
-    };
-
-    let w = Rc::downgrade(app);
-    app.main.on_utility_clicked(move |id| {
-        let Some(a) = w.upgrade() else { return };
+/// Connect every callback. Handlers reach the app through `app()`.
+fn wire(ui: &App) {
+    ui.main.on_utility_clicked(|id| {
+        let Some(a) = app() else { return };
         match id.as_str() {
             "status-monitor" => a.open_monitor(),
             "nozzle-check" => a.start(Utility::NozzleCheck),
@@ -581,85 +567,83 @@ fn wire(app: &Rc<App>) {
             _ => {}
         }
     });
-    app.main.on_close_window(|| {
+    ui.main.on_close_window(|| {
         let _ = slint::quit_event_loop();
     });
-    app.main.window().on_close_requested(|| {
+    ui.main.window().on_close_requested(|| {
         let _ = slint::quit_event_loop();
         slint::CloseRequestResponse::HideWindow
     });
 
     // Dialogs 201 and 223 have no way out on Windows; they close themselves.
-    app.wait.window().on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
-    app.progress.window().on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
+    ui.wait.window().on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
+    ui.progress.window().on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
 
-    app.nozzle.on_print(on(|a| a.nozzle_print()));
-    app.nozzle.on_cancel(on(|a| {
+    ui.nozzle.on_print(on(|a| a.nozzle_print()));
+    ui.nozzle.on_cancel(on(|a| {
         let _ = a.nozzle.hide();
     }));
     // [Clean] goes to the Head Cleaning utility (state 2 in FUN_00413b60).
-    app.nozzle_result.on_clean(on(|a| {
+    ui.nozzle_result.on_clean(on(|a| {
         let _ = a.nozzle_result.hide();
         a.start(Utility::HeadCleaning);
     }));
-    app.nozzle_result.on_finish(on(|a| {
+    ui.nozzle_result.on_finish(on(|a| {
         let _ = a.nozzle_result.hide();
     }));
 
-    let w = Rc::downgrade(app);
-    app.cleaning.on_start(move |power| {
-        if let Some(a) = w.upgrade() {
+    ui.cleaning.on_start(|power| {
+        if let Some(a) = app() {
             a.cleaning_start(power)
         }
     });
-    app.cleaning.on_cancel(on(|a| {
+    ui.cleaning.on_cancel(on(|a| {
         let _ = a.cleaning.hide();
     }));
-    app.power.on_ok(on(|a| {
+    ui.power.on_ok(on(|a| {
         let _ = a.power.hide();
         a.run_cleaning(Cleaning::Power);
     }));
     // [Cancel] returns to the Head Cleaning dialog.
-    app.power.on_cancel(on(|a| {
+    ui.power.on_cancel(on(|a| {
         let _ = a.power.hide();
         let _ = a.cleaning.show();
     }));
     // [Print Nozzle Check Pattern] starts the Nozzle Check (state 1).
-    app.cleaning_done.on_nozzle_check(on(|a| {
+    ui.cleaning_done.on_nozzle_check(on(|a| {
         let _ = a.cleaning_done.hide();
         a.start(Utility::NozzleCheck);
     }));
-    app.cleaning_done.on_finish(on(|a| {
+    ui.cleaning_done.on_finish(on(|a| {
         let _ = a.cleaning_done.hide();
     }));
-    app.message.on_ok(on(|a| {
+    ui.message.on_ok(on(|a| {
         let _ = a.message.hide();
     }));
-    app.message.on_details(on(|a| {
+    ui.message.on_details(on(|a| {
         let _ = a.message.hide();
         a.open_monitor();
     }));
     // "Print Queue": the GNOME printer settings show the CUPS queue.
-    app.monitor.on_print_queue(|| {
+    ui.monitor.on_print_queue(|| {
         if let Ok(mut child) = std::process::Command::new("gnome-control-center").arg("printers").spawn() {
             std::thread::spawn(move || child.wait());
         }
     });
-    app.monitor.on_ok(on(|a| {
+    ui.monitor.on_ok(on(|a| {
         a.monitor_timer.stop();
         let _ = a.monitor.hide();
     }));
-    let w = Rc::downgrade(app);
-    app.monitor.window().on_close_requested(move || {
-        if let Some(a) = w.upgrade() {
+    ui.monitor.window().on_close_requested(|| {
+        if let Some(a) = app() {
             a.monitor_timer.stop();
         }
         slint::CloseRequestResponse::HideWindow
     });
-    app.info.on_ok(on(|a| {
+    ui.info.on_ok(on(|a| {
         let _ = a.info.hide();
     }));
-    app.dump.on_ok(on(|a| {
+    ui.dump.on_ok(on(|a| {
         let _ = a.dump.hide();
     }));
 }
