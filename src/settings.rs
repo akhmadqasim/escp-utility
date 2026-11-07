@@ -274,6 +274,10 @@ impl Values {
         if v.source == 1 && !CD_DVD_MEDIA_LIST.contains(&v.media) {
             v.media = CD_DVD_MEDIA;
         }
+        if v.source == 1 {
+            // The Output Paper list for CD/DVD is A4 only (`output_list`).
+            v.output_size = 0;
+        }
         if v.size >= FIRST_DOCUMENT_SIZE {
             v.reduce = true;
         }
@@ -418,7 +422,14 @@ fn parse_dest_options(text: &str) -> BTreeMap<String, String> {
                 break;
             }
             chars.next();
+            // lpoptions escapes spaces and quotes with a backslash.
+            let (c, escaped) = match c {
+                '\\' => (chars.next().unwrap_or('\\'), true),
+                c => (c, false),
+            };
             match (c, quote) {
+                (c, _) if escaped && in_val => val.push(c),
+                (c, _) if escaped => key.push(c),
                 ('=', None) if !in_val => in_val = true,
                 ('\'' | '"', None) => quote = Some(c),
                 (q, Some(open)) if q == open => quote = None,
@@ -600,8 +611,9 @@ YellowValue/Yellow: -25 *0 25
         assert_eq!(bl.media_list(), vec![1, 2, 3, 4, 5, 6, 7]);
         let sizes: Vec<&str> = bl.size_list().iter().map(|&i| SIZES[i].ppd).collect();
         assert_eq!(sizes, ["A4", "4x6in", "5x7in", "3.5x5in", "169widesize", "100x148mm", "Letter"]);
-        let cd = Values { source: 1, ..Values::default() }.constrained();
+        let cd = Values { source: 1, output_size: 5, ..Values::default() }.constrained();
         assert_eq!(cd.size_list(), vec![0]);
+        assert_eq!(cd.output_size, 0);
         assert_eq!(cd.media, CD_DVD_MEDIA);
         assert!(cd.media_list().contains(&cd.media));
     }
@@ -613,6 +625,50 @@ YellowValue/Yellow: -25 *0 25
         assert_eq!(advanced_qualities(0)[advanced_quality_pos(0, 0)].0, "Fast Economy"); // Draft
         assert_eq!(advanced_qualities(2)[advanced_quality_pos(2, 4)].0, "Photo RPM (Max dpi)");
         assert_eq!(advanced_qualities(9), &[("Photo", 3)]);
+    }
+
+    /// The `-o` pairs saved for some everyday combinations, and the invalid
+    /// ones the constraints turn into valid ones.
+    #[test]
+    fn combinations_map_to_lpoptions() {
+        let d = Values::default;
+        let check = |v: Values, want: &[(&str, &str)]| {
+            let opts = v.to_options();
+            for &(k, val) in want {
+                assert!(opts.contains(&(k.into(), val.into())), "{k}={val} not in {opts:?}");
+            }
+        };
+        // Borderless photo on A4 Premium Glossy, Best Photo.
+        check(
+            Values { media: 2, borderless: true, quality: 4, ..d() },
+            &[("InputSlot", "Sheet"), ("MediaType", "EPREMGLOSS"), ("PageSize", "A4"), ("Borderless", "On"), ("PrintQuality", "BestPhoto")],
+        );
+        // Color Controls (dialog 4300).
+        check(
+            Values { color_mode: 0, gamma: 0, brightness: 10, contrast: -5, saturation: 25, cyan: -25, magenta: 3, yellow: -1, ..d() },
+            &[
+                ("CorrectionColor", "EPSONStandard"),
+                ("GammaValue", "1.8"),
+                ("BrightnessValue", "10"),
+                ("ContrastValue", "-5"),
+                ("SaturationValue", "25"),
+                ("CyanValue", "-25"),
+                ("MagentaValue", "3"),
+                ("YellowValue", "-1"),
+            ],
+        );
+        check(Values { grayscale: true, ..d() }, &[("Color", "Grayscale")]);
+        check(Values { reduce: true, by_percent: true, scale: 150, ..d() }, &[("ReduceEnlarge", "ByPercentage"), ("ScaleRatio", "150")]);
+        check(Values { reduce: true, output_size: 14, ..d() }, &[("ReduceEnlarge", "ByOutputPaperSize"), ("OutputPaper", "Letter")]);
+        // Invalid: borderless on plain paper, CD/DVD with Letter and plain
+        // paper, EPSON Vivid with gamma 1.8, A3 without Reduce/Enlarge.
+        check(Values { borderless: true, ..d() }, &[("Borderless", "Off")]);
+        check(
+            Values { source: 1, size: 14, media: 0, reduce: true, output_size: 5, ..d() },
+            &[("InputSlot", "CD_DVD"), ("MediaType", "CD_DVD"), ("PageSize", "A4"), ("OutputPaper", "A4")],
+        );
+        check(Values { color_mode: 1, gamma: 0, ..d() }, &[("CorrectionColor", "EPSONVivid"), ("GammaValue", "2.2")]);
+        check(Values { size: FIRST_DOCUMENT_SIZE, ..d() }, &[("PageSize", "A3"), ("ReduceEnlarge", "ByOutputPaperSize")]);
     }
 
     #[test]
@@ -627,6 +683,9 @@ YellowValue/Yellow: -25 *0 25
         let m = parse_dest_options("a=1 b='x y' c");
         assert_eq!(m["b"], "x y");
         assert_eq!(m["c"], "");
+        let m = parse_dest_options("printer-info=Bob\\'s\\ L800 copies=2");
+        assert_eq!(m["printer-info"], "Bob's L800");
+        assert_eq!(m["copies"], "2");
     }
 
     #[test]

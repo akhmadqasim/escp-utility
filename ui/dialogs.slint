@@ -19,7 +19,9 @@ component ColorSlider inherits Rectangle {
     in property <length> label-x;
     in property <length> box-x;
     in property <length> slider-x;
-    callback changed;
+    // Dragging assigns the Slider's own value, which drops a `value:` binding;
+    // keep the thumb in step with Reset Controls and with reopening.
+    changed value => { slider.value = root.value; }
     DlgText { x: root.label-x; y: 5px; width: 53px; height: 15px; text: root.label; wrap: no-wrap; color: root.enabled ? #000000 : #8a8a8a; }
     Rectangle {
         x: root.box-x;
@@ -39,7 +41,7 @@ component ColorSlider inherits Rectangle {
         }
     }
     DlgText { x: root.slider-x - 6px; y: 15px; width: 8px; height: 13px; text: "-"; horizontal-alignment: center; }
-    Slider {
+    slider := Slider {
         x: root.slider-x;
         y: 0;
         width: 131px;
@@ -51,7 +53,6 @@ component ColorSlider inherits Rectangle {
         enabled: root.enabled;
         changed(v) => {
             root.value = Math.round(v);
-            root.changed();
         }
     }
     DlgText { x: root.slider-x + 131px; y: 15px; width: 8px; height: 13px; text: "+"; horizontal-alignment: center; }

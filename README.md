@@ -57,7 +57,10 @@ Windows does for its utility launch code (EPUT). The desktop entry uses
 - GTK/GNOME print dialogs and `lp` apply it.
 - `lpadmin` is not used, because the queue is shared.
 - On start the values are read back with `lpoptions -p L800 -l` and
-  `lpoptions -p L800`.
+  `lpoptions -p L800`; the sheet ignores clicks until they are in. Saving
+  (OK/Apply) also runs off the UI thread, with the sheet waiting.
+- `lpoptions` leaves out values equal to the queue's own defaults (such as
+  `copies=1`, `number-up=1`); reading back still gets them from the queue.
 
 **What maps** (SETTINGS.md §2; lists from §1, which match the PPD 1:1):
 
@@ -87,9 +90,11 @@ alone.
 out (PPD UIConstraints, SETTINGS.md §1):
 - Borderless is offered only for the photo papers and Epson Photo Quality Ink
   Jet, at A4, Letter, 10x15, 13x18, 9x13, 16:9 and 100x148.
-- CD/DVD (as source or type) uses A4.
+- CD/DVD (as source or type) uses A4, also as Output Paper.
 - A3, A3+, A2, B4 and B3 force Reduce/Enlarge on.
 - EPSON Vivid allows only gamma 2.2.
+- Values read back from `~/.cups/lpoptions` (which other tools can edit) are
+  constrained the same way before they are shown.
 
 **Disabled, with a tooltip saying why:**
 - No Linux equivalent: PhotoEnhance, Fix Red-Eye, Edge Smoothing, High Speed,

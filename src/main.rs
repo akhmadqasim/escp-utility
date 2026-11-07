@@ -183,9 +183,45 @@ struct App {
     bar_timer: Timer,
     monitor_timer: Timer,
     monitor_in_flight: Cell<bool>,
+    /// `lpoptions` is loading or saving the preferences: the sheet waits.
+    settings_io: Cell<bool>,
 }
 
 impl App {
+    /// The property sheet and every dialog, not shown yet.
+    fn new(mode: Mode, queue: String) -> Result<Rc<App>, slint::PlatformError> {
+        let main = MainWindow::new()?;
+        main.set_queue(queue.clone().into());
+        main.set_version_text(env!("CARGO_PKG_VERSION").into());
+        Ok(Rc::new(App {
+            mode,
+            queue,
+            main,
+            wait: WaitDialog::new()?,
+            nozzle: NozzleCheckDialog::new()?,
+            nozzle_result: NozzleResultDialog::new()?,
+            cleaning: HeadCleaningDialog::new()?,
+            power: PowerCleaningDialog::new()?,
+            progress: ProgressDialog::new()?,
+            cleaning_done: CleaningDoneDialog::new()?,
+            paper_guide: PaperGuideDialog::new()?,
+            message: MessageDialog::new()?,
+            monitor: StatusMonitorDialog::new()?,
+            info: TextDialog::new()?,
+            dump: TextDialog::new()?,
+            current_settings: CurrentSettingsDialog::new()?,
+            color_controls: ColorControlsDialog::new()?,
+            layout_dialog: LayoutDialog::new()?,
+            have_status: Cell::new(false),
+            progress_state: RefCell::new(Progress::default()),
+            poll_timer: Timer::default(),
+            bar_timer: Timer::default(),
+            monitor_timer: Timer::default(),
+            monitor_in_flight: Cell::new(false),
+            settings_io: Cell::new(false),
+        }))
+    }
+
     fn open(&self, c: &impl ComponentHandle) {
         let _ = c.show();
         self.refresh_busy();
@@ -199,7 +235,7 @@ impl App {
     /// Windows runs the utility dialogs modally: while one is open, the
     /// property sheet ignores clicks.
     fn refresh_busy(&self) {
-        self.main.set_busy(self.modal_windows().iter().any(|w| w.is_visible()));
+        self.main.set_busy(self.settings_io.get() || self.modal_windows().iter().any(|w| w.is_visible()));
     }
 
     /// Every dialog that blocks the property sheet while it is open (the
@@ -233,6 +269,8 @@ impl App {
     // Prefs global; OK saves and closes, Apply saves, Cancel discards.
 
     fn set_prefs(&self, v: &Values) {
+        // Values loaded from ~/.cups/lpoptions can break the constraints too.
+        let v = &v.constrained();
         let p = self.main.global::<Prefs>();
         // The source-dependent lists and the selected row in each.
         let labels = |rows: &[usize], table: &[settings::Choice]| strings(rows.iter().map(|&i| table[i].label));
@@ -365,8 +403,10 @@ impl App {
         v.cyan = d.get_cyan();
         v.magenta = d.get_magenta();
         v.yellow = d.get_yellow();
-        self.set_prefs(&v.constrained());
-        self.main.global::<Prefs>().set_dirty(true);
+        self.set_prefs(&v);
+        let p = self.main.global::<Prefs>();
+        p.set_dirty(true);
+        p.set_preset(-1);
         self.close(d);
     }
 
@@ -408,9 +448,10 @@ impl App {
         self.current_settings.set_lines(slint::VecModel::from_slice(&lines));
     }
 
-    /// Save for this user with `lpoptions -p <queue> -o ...` (~/.cups/lpoptions).
-    /// In dry-run the command is only shown. Returns true when saved.
-    fn save_prefs(&self) -> bool {
+    /// Save for this user with `lpoptions -p <queue> -o ...` (~/.cups/lpoptions),
+    /// off the UI thread; the sheet waits meanwhile. In dry-run the command is
+    /// only shown. `quit` (OK) closes the sheet once saved.
+    fn save_prefs(&self, quit: bool) {
         let v = self.prefs();
         if self.dry_run() {
             let args = settings::save_args(&self.queue, &v);
@@ -419,22 +460,30 @@ impl App {
             self.dump.set_content(format!("lpoptions {}\n", args.join(" \\\n    ")).into());
             self.open(&self.dump);
             self.main.global::<Prefs>().set_dirty(false);
-            return false;
+            return;
         }
-        match settings::save(&self.queue, &v) {
-            Ok(()) => {
-                self.main.global::<Prefs>().set_dirty(false);
-                true
+        self.settings_io.set(true);
+        self.refresh_busy();
+        let queue = self.queue.clone();
+        bg(move || (quit, settings::save(&queue, &v)), |app, (quit, res)| {
+            app.settings_io.set(false);
+            app.refresh_busy();
+            match res {
+                Ok(()) => {
+                    app.main.global::<Prefs>().set_dirty(false);
+                    if quit {
+                        let _ = slint::quit_event_loop();
+                    }
+                }
+                Err(e) => {
+                    app.message.set_utility("Printing Preferences".into());
+                    app.message.set_heading("The settings could not be saved.".into());
+                    app.message.set_body(e.into());
+                    app.message.set_show_details(false);
+                    app.open(&app.message);
+                }
             }
-            Err(e) => {
-                self.message.set_utility("Printing Preferences".into());
-                self.message.set_heading("The settings could not be saved.".into());
-                self.message.set_body(e.into());
-                self.message.set_show_details(false);
-                self.open(&self.message);
-                false
-            }
-        }
+        });
     }
 
     fn dry_run(&self) -> bool {
@@ -869,36 +918,7 @@ fn main() -> Result<(), slint::PlatformError> {
             std::process::exit(2);
         }
     };
-    let main = MainWindow::new()?;
-    main.set_queue(args.queue.clone().into());
-    main.set_version_text(env!("CARGO_PKG_VERSION").into());
-
-    let app = Rc::new(App {
-        mode: args.dump_dir.map_or(Mode::Live, Mode::DryRun),
-        queue: args.queue,
-        main,
-        wait: WaitDialog::new()?,
-        nozzle: NozzleCheckDialog::new()?,
-        nozzle_result: NozzleResultDialog::new()?,
-        cleaning: HeadCleaningDialog::new()?,
-        power: PowerCleaningDialog::new()?,
-        progress: ProgressDialog::new()?,
-        cleaning_done: CleaningDoneDialog::new()?,
-        paper_guide: PaperGuideDialog::new()?,
-        message: MessageDialog::new()?,
-        monitor: StatusMonitorDialog::new()?,
-        info: TextDialog::new()?,
-        dump: TextDialog::new()?,
-        current_settings: CurrentSettingsDialog::new()?,
-        color_controls: ColorControlsDialog::new()?,
-        layout_dialog: LayoutDialog::new()?,
-        have_status: Cell::new(false),
-        progress_state: RefCell::new(Progress::default()),
-        poll_timer: Timer::default(),
-        bar_timer: Timer::default(),
-        monitor_timer: Timer::default(),
-        monitor_in_flight: Cell::new(false),
-    });
+    let app = App::new(args.dump_dir.map_or(Mode::Live, Mode::DryRun), args.queue)?;
     APP.with(|a| *a.borrow_mut() = Rc::downgrade(&app));
     app.main.set_dry_run(app.dry_run());
     app.main.set_current_tab(if args.utility { 4 } else { 1 });
@@ -907,10 +927,17 @@ fn main() -> Result<(), slint::PlatformError> {
     app.color_controls.set_color_mode_labels(p.get_color_mode_labels());
     app.color_controls.set_gamma_labels(p.get_gamma_labels());
     app.set_prefs(&Values::default());
+    // The sheet waits for the load, so no early edit (or OK) is lost to it.
+    app.settings_io.set(true);
+    app.refresh_busy();
     let queue = app.queue.clone();
-    bg(move || settings::load(&queue), |app, res| match res {
-        Ok(v) => app.set_prefs(&v),
-        Err(e) => eprintln!("epson-l800-utility: cannot read the printing preferences: {e}"),
+    bg(move || settings::load(&queue), |app, res| {
+        app.settings_io.set(false);
+        app.refresh_busy();
+        match res {
+            Ok(v) => app.set_prefs(&v),
+            Err(e) => eprintln!("epson-l800-utility: cannot read the printing preferences: {e}"),
+        }
     });
     // The Ink Levels boxes on Main and Shortcuts: one status query when the
     // sheet opens (same rules as always: none while CUPS has jobs, Exit is
@@ -950,14 +977,8 @@ fn wire(ui: &App) {
     // Epson's driver download page for the L800 instead.
     ui.main.on_driver_update(|| launch("xdg-open", DRIVER_PAGE));
     // OK = save + close, Apply = save, Cancel (or the close box) = discard.
-    ui.main.on_ok(on(|a| {
-        if a.save_prefs() {
-            let _ = slint::quit_event_loop();
-        }
-    }));
-    ui.main.on_apply(on(|a| {
-        a.save_prefs();
-    }));
+    ui.main.on_ok(on(|a| a.save_prefs(true)));
+    ui.main.on_apply(on(|a| a.save_prefs(false)));
     ui.main.on_cancel(|| {
         let _ = slint::quit_event_loop();
     });
@@ -980,7 +1001,7 @@ fn wire(ui: &App) {
             _ => return,
         }
         let p = a.main.global::<Prefs>();
-        a.set_prefs(&v.constrained());
+        a.set_prefs(&v);
         p.set_dirty(true);
         p.set_preset(-1);
     });
@@ -1003,13 +1024,15 @@ fn wire(ui: &App) {
     });
     prefs.on_reset_defaults(on(|a| {
         a.set_prefs(&Values::default());
-        a.main.global::<Prefs>().set_dirty(true);
+        let p = a.main.global::<Prefs>();
+        p.set_dirty(true);
+        p.set_preset(-1);
     }));
     prefs.on_preset_picked(|i| {
         let (Some(a), Some(preset)) = (app(), usize::try_from(i).ok().and_then(|i| settings::PRESETS.get(i))) else { return };
         let mut v = a.prefs();
         preset.apply(&mut v);
-        a.set_prefs(&v.constrained());
+        a.set_prefs(&v);
         let p = a.main.global::<Prefs>();
         p.set_dirty(true);
         p.set_preset(i);
@@ -1100,6 +1123,45 @@ fn wire(ui: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slint::Model;
+
+    /// No display: windows render into memory (and are never shown here).
+    struct Headless;
+    impl slint::platform::Platform for Headless {
+        fn create_window_adapter(&self) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+            use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+            Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+        }
+    }
+
+    /// What a reload does with the values lpoptions reports: the sheet
+    /// shows them (constrained, with the matching row in each list) and
+    /// reads back the same values.
+    #[test]
+    fn reload_restores_the_sheet() {
+        let _ = slint::platform::set_platform(Box::new(Headless));
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), "L800".into()).unwrap();
+        let p = app.main.global::<Prefs>();
+        fill_lists(&p);
+        let d = Values::default;
+        for v in [
+            Values { media: 2, borderless: true, quality: 4, ..d() },
+            Values { color_mode: 0, gamma: 0, brightness: 10, contrast: -5, cyan: -25, yellow: 12, ..d() },
+            Values { grayscale: true, landscape: true, reverse: true, ..d() },
+            Values { reduce: true, by_percent: true, scale: 150, ..d() },
+            Values { multi_page: true, poster: true, poster_index: 2, copies: 3, collate: true, ..d() },
+            // Not allowed together; a file edited elsewhere can still hold it.
+            Values { source: 1, size: 14, output_size: 5, borderless: true, ..d() },
+        ] {
+            app.set_prefs(&v);
+            let want = v.constrained();
+            assert_eq!(app.prefs(), want);
+            let shown = |labels: slint::ModelRc<slint::SharedString>, pos: i32| labels.row_data(pos as usize).unwrap().to_string();
+            assert_eq!(shown(p.get_media_labels(), p.get_media_pos()), settings::MEDIA[want.media].label);
+            assert_eq!(shown(p.get_size_labels(), p.get_size_pos()), settings::SIZES[want.size].label);
+            assert_eq!(shown(p.get_output_labels(), p.get_output_pos()), settings::output_sizes()[want.output_size].label);
+        }
+    }
 
     fn args(v: &[&str]) -> Result<Args, String> {
         parse_args(v.iter().map(|s| s.to_string()))
