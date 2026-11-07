@@ -14,7 +14,8 @@ mod printer;
 
 fn main() {
     let queue = std::env::args().nth(1).unwrap_or_else(|| "L800".into());
-    let p = printer::Identity::of(&queue);
+    // USB or URI identity; the PPD is not needed for a status query.
+    let p = printer::Identity::of(&queue, None);
     print!("{}", p.summary());
     let started = std::time::Instant::now();
     match status::query(&queue, p.status_node().as_deref()) {

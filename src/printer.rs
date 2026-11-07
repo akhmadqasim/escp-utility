@@ -12,10 +12,11 @@
 //!    (nothing is sent to the printer), for the `lpN` whose USB device
 //!    serial (`device/../serial`) equals the queue URI's `?serial=`.
 //! 2. The queue URI `usb://MFG/MDL?...` (printer switched off or unplugged).
-//! 3. The queue PPD's `*1284DeviceID` (MFG and MDL only), from cupsd.
+//! 3. The queue PPD's `*1284DeviceID` (MFG and MDL only), from cupsd
+//!    (`ppd::fetch`, done by the caller).
 //!
-//! Only read-only `lpstat`/`lpoptions` calls and one PPD download from
-//! cupsd are made here; nothing reaches the printer.
+//! Only read-only `lpstat`/`lpoptions` calls are made here; nothing reaches
+//! the printer.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -205,35 +206,6 @@ pub fn usb_match(root: &Path, serial: &str) -> Option<(PathBuf, String)> {
     None
 }
 
-/// The PPD of a queue, as cupsd serves it (`GET /printers/QUEUE.ppd` on
-/// localhost:631; /etc/cups/ppd is not readable for users).
-pub fn cups_ppd(queue: &str) -> Option<String> {
-    use std::io::{Read, Write};
-    use std::net::{TcpStream, ToSocketAddrs};
-    use std::time::Duration;
-    let path: String = queue
-        .bytes()
-        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
-        .collect();
-    let addrs = ("localhost", 631).to_socket_addrs().ok()?;
-    let mut s = addrs.into_iter().find_map(|a| TcpStream::connect_timeout(&a, Duration::from_secs(2)).ok())?;
-    s.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
-    write!(s, "GET /printers/{path}.ppd HTTP/1.0\r\nHost: localhost\r\n\r\n").ok()?;
-    let mut buf = Vec::new();
-    s.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let (head, body) = text.split_once("\r\n\r\n")?;
-    (head.split_whitespace().nth(1) == Some("200")).then(|| body.to_string())
-}
-
-/// A quoted PPD main keyword value, such as `*NickName: "..."`.
-pub fn ppd_value(ppd: &str, keyword: &str) -> Option<String> {
-    let prefix = format!("*{keyword}:");
-    let line = ppd.lines().find_map(|l| l.strip_prefix(&prefix))?;
-    let v = line.trim();
-    Some(v.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(v).to_string())
-}
-
 /// Where the device ID came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Source {
@@ -258,20 +230,21 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Identify the printer of `queue` from the sources in the module comment.
-    pub fn of(queue: &str) -> Identity {
+    /// Identify the printer of `queue` from the sources in the module
+    /// comment; `ppd_id` is the queue PPD's `*1284DeviceID`, if any.
+    pub fn of(queue: &str, ppd_id: Option<&str>) -> Identity {
         let uri = queues(Some(queue)).into_iter().find(|q| q.name == queue).map(|q| q.uri).unwrap_or_default();
-        Identity::from_parts(queue, uri, make_model(queue), Path::new(USBMISC), || cups_ppd(queue))
+        Identity::from_parts(queue, uri, make_model(queue), Path::new(USBMISC), ppd_id)
     }
 
-    fn from_parts(queue: &str, uri: String, make_model: String, usbmisc: &Path, ppd: impl FnOnce() -> Option<String>) -> Identity {
+    fn from_parts(queue: &str, uri: String, make_model: String, usbmisc: &Path, ppd_id: Option<&str>) -> Identity {
         let serial = uri.starts_with("usb://").then(|| uri_param(&uri, "serial")).flatten();
         let (id, source) = if let Some((_, raw)) = serial.as_deref().and_then(|s| usb_match(usbmisc, s)) {
             (DeviceId::parse(&raw), Source::Usb)
         } else if let Some(id) = uri_device_id(&uri) {
             (id, Source::Uri)
-        } else if let Some(raw) = ppd().and_then(|p| ppd_value(&p, "1284DeviceID")) {
-            (DeviceId::parse(&raw), Source::Ppd)
+        } else if let Some(raw) = ppd_id {
+            (DeviceId::parse(raw), Source::Ppd)
         } else {
             (DeviceId::default(), Source::None)
         };
@@ -382,14 +355,6 @@ mod tests {
         assert_eq!(lpoptions_value(r"a=it\'s b='x y'", "a").as_deref(), Some("it's"));
     }
 
-    #[test]
-    fn ppd_values() {
-        let ppd = "*PPD-Adobe: \"4.3\"\n*NickName:      \"Epson L800 Series - epson-inkjet-printer 1.0.2-1 (Seiko Epson Corporation)\"\n*1284DeviceID: \"MFG:EPSON;MDL:L800 Series;DES:EPSON L800 Series;\"\n";
-        assert_eq!(ppd_value(ppd, "1284DeviceID").as_deref(), Some("MFG:EPSON;MDL:L800 Series;DES:EPSON L800 Series;"));
-        assert!(ppd_value(ppd, "NickName").unwrap().starts_with("Epson L800 Series"));
-        assert_eq!(ppd_value(ppd, "ModelName"), None);
-    }
-
     /// A fake /sys/class/usbmisc: lp0 is another printer, lp3 the L800.
     fn fake_sysfs() -> PathBuf {
         let root = std::env::temp_dir().join(format!("usbmisc-{}", std::process::id()));
@@ -410,19 +375,18 @@ mod tests {
     fn usb_identity_from_sysfs() {
         let root = fake_sysfs();
         let uri = "usb://EPSON/L800?serial=1234567X8901234567".to_string();
-        let i = Identity::from_parts("L800", uri, "Epson L800 Series".into(), &root, || panic!("no PPD needed"));
+        let i = Identity::from_parts("L800", uri, "Epson L800 Series".into(), &root, Some("MFG:EPSON;MDL:wrong;"));
         assert_eq!(i.source, Source::Usb);
         assert_eq!(i.id.raw, L800_ID);
         assert!(i.id.maintenance());
         assert_eq!(i.status_node_in(&root), Some(PathBuf::from("/dev/usb/lp3")));
         // Unplugged: the URI still names the model, but there is no node.
-        let i = Identity::from_parts("L800", "usb://EPSON/L800?serial=GONE".into(), String::new(), &root, || None);
+        let i = Identity::from_parts("L800", "usb://EPSON/L800?serial=GONE".into(), String::new(), &root, None);
         assert_eq!((i.source, i.id.mdl()), (Source::Uri, Some("L800")));
         assert!(!i.id.maintenance(), "no CMD: only a profile allows maintenance");
         assert_eq!(i.status_node_in(&root), None);
         // A network queue: the PPD's ID, no node.
-        let ppd = || Some("*1284DeviceID: \"MFG:EPSON;MDL:ET-2750 Series;\"\n".to_string());
-        let i = Identity::from_parts("ET", "ipp://10.0.0.5/ipp/print".into(), String::new(), &root, ppd);
+        let i = Identity::from_parts("ET", "ipp://10.0.0.5/ipp/print".into(), String::new(), &root, Some("MFG:EPSON;MDL:ET-2750 Series;"));
         assert_eq!((i.source, i.id.mdl()), (Source::Ppd, Some("ET-2750 Series")));
         assert!(!i.id.maintenance());
         assert_eq!(i.status_node_in(&root), None);

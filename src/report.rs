@@ -4,14 +4,15 @@
 //! is the only thing sent to the printer, under the usual rules (not while
 //! CUPS has jobs, Exit always sent).
 
-use crate::printer::{self, Identity};
+use crate::printer::Identity;
 use crate::profile::Profile;
 use crate::status::{self, QueryError, Status, st2};
 
 /// Collect and format the report for `queue`.
 pub fn run(queue: &str, profiles: &[Profile]) -> String {
-    let p = Identity::of(queue);
-    let nickname = printer::cups_ppd(queue).and_then(|ppd| printer::ppd_value(&ppd, "NickName"));
+    let ppd = crate::ppd::fetch(queue).and_then(|t| crate::ppd::parse(&t)).ok();
+    let p = Identity::of(queue, ppd.as_ref().and_then(|p| p.device_id.as_deref()));
+    let nickname = ppd.and_then(|p| p.nickname);
     let options = match std::process::Command::new("lpoptions").env("LC_ALL", "C").args(["-p", queue, "-l"]).output() {
         Ok(o) => format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),
         Err(e) => format!("cannot run lpoptions: {e}\n"),
@@ -65,6 +66,7 @@ fn format(p: &Identity, profile: Option<&Profile>, nickname: Option<&str>, optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::printer;
 
     #[test]
     fn report_masks_the_serial() {

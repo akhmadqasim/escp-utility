@@ -27,6 +27,25 @@ mod layouts;
 #[allow(dead_code)] // only the tables are used here
 mod settings;
 
+#[path = "../src/ppd.rs"]
+#[allow(dead_code)]
+mod ppd;
+
+#[path = "../src/ppd_sheet.rs"]
+#[allow(dead_code)]
+mod ppd_sheet;
+
+/// The escpr PPD whose NickName starts with `nick`, from $ESCPR_PPD_DIR
+/// (Epson's files, not in git).
+fn escpr_sheet(nick: &str) -> Option<ppd_sheet::Sheet> {
+    let dir = std::env::var("ESCPR_PPD_DIR").ok()?;
+    std::fs::read_dir(dir).ok()?.flatten().find_map(|e| {
+        let text = std::fs::read_to_string(e.path()).ok()?;
+        let ppd = ppd::parse(&text).ok().filter(|_| text.contains(&format!("*NickName: \"{nick} ")))?;
+        Some(ppd_sheet::Sheet::new(ppd))
+    })
+}
+
 /// Same lists as main.rs `fill_lists`.
 fn fill_lists(p: &Prefs) {
     let labels = |list: &[settings::Choice]| -> slint::ModelRc<slint::SharedString> {
@@ -298,4 +317,35 @@ fn main() {
     d.set_queues(slint::ModelRc::default());
     render(&p, "chooser-none", &d, &out);
 
+    // Last: render() draws the window created last.
+    // Another printer's sheet, from its escpr PPD: the L805 on Main and
+    // Advanced, with Premium Glossy, High and borderless 10 x 15 cm.
+    match escpr_sheet("EPSON L805 Series") {
+        None => eprintln!("ESCPR_PPD_DIR unset or without the L805 PPD: no PPD sheet screenshots"),
+        Some(sheet) => {
+            let m = MainWindow::new().unwrap();
+            m.set_version_text(env!("CARGO_PKG_VERSION").into());
+            m.set_queue("L805".into());
+            m.set_dry_run(true);
+            let prefs = m.global::<Prefs>();
+            fill_lists(&prefs);
+            prefs.set_inks(slint::VecModel::from_slice(&inks));
+            let glossy = sheet.view(&sheet.defaults()).media.items.iter().find(|(_, l)| l == "Epson Premium Glossy").unwrap().0;
+            let mut sel = sheet.apply(&sheet.defaults(), &ppd_sheet::Edit::Media(glossy));
+            for e in [ppd_sheet::Edit::Quality(3), ppd_sheet::Edit::Borderless(true)] {
+                sel = sheet.apply(&sel, &e);
+            }
+            ppd_sheet::show(&prefs, &sheet.view(&sel));
+            ppd_sheet::show_std(&prefs, &ppd_sheet::Std::default());
+            for (tab, name) in [(1, "sheet-ppd-l805-main"), (2, "sheet-ppd-l805-advanced"), (3, "sheet-ppd-l805-page-layout")] {
+                m.set_current_tab(tab);
+                render(&p, name, &m, &out);
+            }
+        }
+    }
+    if let Some(sheet) = escpr_sheet("EPSON ET-2750 Series") {
+        let d = PrinterOptionsDialog::new().unwrap();
+        d.set_rows(slint::VecModel::from_slice(&ppd_sheet::option_rows(&sheet.view(&sheet.defaults()))));
+        render(&p, "printer-options-et2750", &d, &out);
+    }
 }

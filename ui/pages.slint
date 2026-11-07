@@ -32,6 +32,20 @@ export global Prefs {
     in property <[bool]> media-borderless;
     in property <[bool]> size-borderless;
     in property <[string]> quality-labels;
+    // Any printer but the L800 (src/ppd_sheet.rs): the lists and values come
+    // from its PPD, and controls whose option it lacks are greyed out.
+    in property <bool> ppd-mode;
+    in property <[bool]> quality-enabled: [true, true, true, true, true];
+    in property <bool> has-quality: true;
+    in property <bool> has-source: true;
+    in property <bool> has-media: true;
+    in property <bool> has-size: true;
+    in property <bool> has-grayscale: true;
+    in property <bool> has-color-mode: true;
+    in property <bool> has-gamma: true;
+    in property <bool> has-color-controls: true;
+    in property <bool> has-printer-options;
+    in property <bool> ppd-borderless-allowed;
     // Values.
     in-out property <int> quality;
     in-out property <int> source;
@@ -73,14 +87,15 @@ export global Prefs {
     // The Current Settings window (dialog 4050) is open.
     in property <bool> settings-shown;
     callback toggle-settings();
-    out property <bool> borderless-allowed:
+    out property <bool> borderless-allowed: root.ppd-mode ? root.ppd-borderless-allowed :
         root.source-borderless[root.source] && root.media-borderless[root.media] && root.size-borderless[root.size];
     // Index of the first size that needs Reduce/Enlarge (A3, A3+, A2, B4, B3).
     in property <int> first-document-size: 16;
-    out property <bool> needs-reduce: root.size >= root.first-document-size;
-    out property <bool> vivid: root.color-mode == 1;
-    // Plain sheet feed: Reduce/Enlarge works only here (FUN_68f8d8e4).
-    out property <bool> sheet-feed: root.source == 0 && !(root.borderless && root.borderless-allowed);
+    out property <bool> needs-reduce: !root.ppd-mode && root.size >= root.first-document-size;
+    out property <bool> vivid: !root.ppd-mode && root.color-mode == 1;
+    // Plain sheet feed: Reduce/Enlarge works only here (FUN_68f8d8e4). It
+    // is an L800 PPD option, so other printers have none.
+    out property <bool> sheet-feed: !root.ppd-mode && root.source == 0 && !(root.borderless && root.borderless-allowed);
     callback reset-defaults();
     callback preset-picked(int);
     // Any edit (Rust refreshes the Current Settings window).
@@ -88,7 +103,7 @@ export global Prefs {
     // A row picked in a source-dependent list: "media", "size", "output", "quality".
     callback pick(string, int);
     // Open a sub-dialog: "color-controls", "custom-settings", "page-order",
-    // "poster", "margins", "watermark".
+    // "poster", "margins", "watermark", "printer-options".
     callback open-dialog(string);
 
     // After every edit: mark dirty; Rust (`edited`) then applies the PPD
@@ -104,10 +119,12 @@ export global Prefs {
 component QualityIcon inherits Rectangle {
     in property <image> source;
     in property <int> level;
+    in property <bool> enabled: true;
     width: 42px;
     height: 52px;
-    Image { source: root.source; width: 100%; height: 100%; }
+    Image { source: root.source; width: 100%; height: 100%; opacity: root.enabled ? 1.0 : 0.35; }
     TouchArea {
+        enabled: root.enabled;
         clicked => {
             Prefs.quality = root.level;
             Prefs.changed();
@@ -185,8 +202,10 @@ export component ShortcutsPage inherits Rectangle {
         x: 8px; y: 25px; width: 201px; height: 302px;
         model: Prefs.preset-labels;
         current-index: Prefs.preset;
+        enabled: !Prefs.ppd-mode;
         selected => { Prefs.preset-picked(self.current-index); }
     }
+    if Prefs.ppd-mode: Rectangle { x: 8px; y: 25px; width: 201px; height: 302px; Tooltip { text: @markdown("\{Strings.presets-l800}"); } }
     DlgButton { x: 129px; y: 333px; width: 80px; height: 23px; text: "Reset"; enabled: false; tip: Strings.windows-only; }
     CheckBox { x: 8px; y: 362px; width: 201px; height: 29px; text: "Do not display mouse-over messages for Printing Presets."; multiline: true; enabled: false; tip: Strings.windows-only; }
     // 5253, bottom-aligned with the list; How to Buy (5262) hidden, as on Main.
@@ -213,10 +232,12 @@ export component MainPage inherits Rectangle {
         { c: 307px, w: 48px, icon: @image-url("icons/quality-photo.svg") },
         { c: 392px, w: 86px, icon: @image-url("icons/quality-bestphoto.svg") },
     ]: Rectangle {
-        QualityIcon { x: q.c - 21px; y: 29px; level: i; source: q.icon; }
+        QualityIcon { x: q.c - 21px; y: 29px; level: i; source: q.icon; enabled: Prefs.quality-enabled[i]; }
         Radio {
             x: q.c - q.w / 2; y: 87px; width: q.w; height: 13px;
             text: Prefs.quality-labels[i];
+            enabled: Prefs.quality-enabled[i];
+            tip: Prefs.quality-enabled[i] ? "" : Strings.not-in-ppd;
             checked: Prefs.quality == i;
             picked => {
                 Prefs.quality = i;
@@ -227,11 +248,11 @@ export component MainPage inherits Rectangle {
 
     Group { x: 8px; y: 114px; width: 255px; height: 133px; title: "Paper Options"; }
     DlgText { x: 16px; y: 139px; width: 38px; height: 13px; text: "Source"; wrap: no-wrap; horizontal-alignment: right; }
-    Combo { x: 60px; y: 135px; width: 195px; model: Prefs.source-labels; current-index <=> Prefs.source; selected => { Prefs.changed(); } }
+    Combo { x: 60px; y: 135px; width: 195px; model: Prefs.source-labels; current-index <=> Prefs.source; enabled: Prefs.has-source; tip: Prefs.has-source ? "" : Strings.not-in-ppd; selected => { Prefs.changed(); } }
     DlgText { x: 16px; y: 165px; width: 38px; height: 13px; text: "Type"; wrap: no-wrap; horizontal-alignment: right; }
-    Combo { x: 60px; y: 161px; width: 195px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; selected => { Prefs.pick("media", self.current-index); } }
+    Combo { x: 60px; y: 161px; width: 195px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; enabled: Prefs.has-media; tip: Prefs.has-media ? "" : Strings.not-in-ppd; selected => { Prefs.pick("media", self.current-index); } }
     DlgText { x: 16px; y: 191px; width: 38px; height: 13px; text: "Size"; wrap: no-wrap; horizontal-alignment: right; }
-    Combo { x: 60px; y: 187px; width: 195px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; selected => { Prefs.pick("size", self.current-index); } }
+    Combo { x: 60px; y: 187px; width: 195px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; enabled: Prefs.has-size; tip: Prefs.has-size ? "" : Strings.not-in-ppd; selected => { Prefs.pick("size", self.current-index); } }
     // On the same row as Quiet Mode, so both groups end together.
     Radio {
         x: 60px; y: 226px; width: 60px; height: 13px; text: "Borders";
@@ -279,11 +300,11 @@ export component AdvancedPage inherits Rectangle {
     height: 434px;
     background: #ffffff;
     Group { x: 8px; y: 8px; width: 210px; height: 147px; title: "Paper & Quality Options"; }
-    Combo { x: 16px; y: 29px; width: 194px; model: Prefs.source-labels; current-index <=> Prefs.source; selected => { Prefs.changed(); } }
-    Combo { x: 16px; y: 55px; width: 194px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; selected => { Prefs.pick("media", self.current-index); } }
+    Combo { x: 16px; y: 29px; width: 194px; model: Prefs.source-labels; current-index <=> Prefs.source; enabled: Prefs.has-source; tip: Prefs.has-source ? "" : Strings.not-in-ppd; selected => { Prefs.changed(); } }
+    Combo { x: 16px; y: 55px; width: 194px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; enabled: Prefs.has-media; tip: Prefs.has-media ? "" : Strings.not-in-ppd; selected => { Prefs.pick("media", self.current-index); } }
     // 3105 Print Quality: the print modes of this paper type (strings 1400-1430).
-    Combo { x: 16px; y: 81px; width: 194px; model: Prefs.adv-quality-labels; current-index <=> Prefs.adv-quality-pos; selected => { Prefs.pick("quality", self.current-index); } }
-    Combo { x: 16px; y: 107px; width: 194px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; selected => { Prefs.pick("size", self.current-index); } }
+    Combo { x: 16px; y: 81px; width: 194px; model: Prefs.adv-quality-labels; current-index <=> Prefs.adv-quality-pos; enabled: Prefs.has-quality; tip: Prefs.has-quality ? "" : Strings.not-in-ppd; selected => { Prefs.pick("quality", self.current-index); } }
+    Combo { x: 16px; y: 107px; width: 194px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; enabled: Prefs.has-size; tip: Prefs.has-size ? "" : Strings.not-in-ppd; selected => { Prefs.pick("size", self.current-index); } }
     Radio {
         x: 16px; y: 134px; width: 68px; height: 13px; text: "Borders";
         checked: !Prefs.borderless || !Prefs.borderless-allowed;
@@ -307,7 +328,7 @@ export component AdvancedPage inherits Rectangle {
     CheckBox { x: 16px; y: 274px; width: 105px; height: 13px; text: "Edge Smoothing"; enabled: false; tip: Strings.no-linux; }
     CheckBox { x: 16px; y: 296px; width: 105px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
     // 3115 Grayscale: the L800's only colour switch (PPD Color=Grayscale).
-    CheckBox { x: 16px; y: 318px; width: 105px; height: 13px; text: "Grayscale"; checked <=> Prefs.grayscale; toggled => { Prefs.changed(); } }
+    CheckBox { x: 16px; y: 318px; width: 105px; height: 13px; text: "Grayscale"; checked <=> Prefs.grayscale; enabled: Prefs.has-grayscale; tip: Prefs.has-grayscale ? "" : Strings.not-in-ppd; toggled => { Prefs.changed(); } }
     EtchedLine { x: 16px; y: 340px; width: 194px; }
     CheckBox { x: 16px; y: 347px; width: 105px; height: 13px; text: "Quiet Mode"; enabled: false; tip: Strings.quiet-off; }
 
@@ -317,10 +338,17 @@ export component AdvancedPage inherits Rectangle {
     Radio { x: 232px; y: 73px; width: 86px; height: 13px; text: "ICM"; enabled: false; tip: "No driver ICM on Linux: use colour management in the application or colord."; }
     EtchedLine { x: 232px; y: 93px; width: 195px; }
     DlgText { x: 232px; y: 106px; width: 57px; height: 13px; text: "Color Mode"; wrap: no-wrap; }
-    Combo { x: 297px; y: 102px; width: 130px; model: Prefs.color-mode-labels; current-index <=> Prefs.color-mode; selected => { Prefs.changed(); } }
+    Combo { x: 297px; y: 102px; width: 130px; model: Prefs.color-mode-labels; current-index <=> Prefs.color-mode; enabled: Prefs.has-color-mode; tip: Prefs.has-color-mode ? "" : Strings.not-in-ppd; selected => { Prefs.changed(); } }
     DlgText { x: 232px; y: 132px; width: 57px; height: 13px; text: "Gamma"; wrap: no-wrap; }
-    Combo { x: 297px; y: 128px; width: 130px; model: Prefs.gamma-labels; current-index <=> Prefs.gamma; enabled: !Prefs.vivid; tip: Prefs.vivid ? Strings.gamma-vivid : ""; selected => { Prefs.changed(); } }
-    DlgButton { x: 346px; y: 172px; width: 81px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("color-controls"); } }
+    Combo { x: 297px; y: 128px; width: 130px; model: Prefs.gamma-labels; current-index <=> Prefs.gamma; enabled: Prefs.has-gamma && !Prefs.vivid; tip: !Prefs.has-gamma ? Strings.not-in-ppd : Prefs.vivid ? Strings.gamma-vivid : ""; selected => { Prefs.changed(); } }
+    DlgButton { x: 346px; y: 172px; width: 81px; height: 23px; text: "Settings..."; enabled: Prefs.has-color-controls; tip: Prefs.has-color-controls ? "" : Strings.not-in-ppd; clicked => { Prefs.open-dialog("color-controls"); } }
+    // Ours, for other printers: the PPD options no Windows control takes.
+    if Prefs.ppd-mode: DlgButton {
+        x: 224px; y: 209px; width: 110px; height: 23px; text: "Printer Options...";
+        enabled: Prefs.has-printer-options;
+        tip: Prefs.has-printer-options ? "" : Strings.no-printer-options;
+        clicked => { Prefs.open-dialog("printer-options"); }
+    }
 
     ShowFirstCheck { }
     ResetDefaultsButton { }
@@ -391,7 +419,7 @@ export component PageLayoutPage inherits Rectangle {
         x: 16px; y: 29px; width: 155px; height: 13px; text: "Reduce/Enlarge Document";
         checked <=> Prefs.reduce;
         enabled: !Prefs.needs-reduce && Prefs.sheet-feed;
-        tip: Prefs.needs-reduce ? "This paper size is larger than the printer can print: it must be reduced." : "";
+        tip: Prefs.ppd-mode ? Strings.not-in-ppd : Prefs.needs-reduce ? "This paper size is larger than the printer can print: it must be reduced." : "";
         toggled => { Prefs.changed(); }
     }
     Radio {
@@ -416,7 +444,8 @@ export component PageLayoutPage inherits Rectangle {
     }
     Radio {
         x: 32px; y: 179px; width: 92px; height: 13px; text: "Poster Printing";
-        enabled: Prefs.multi-page; checked: Prefs.poster;
+        enabled: Prefs.multi-page && !Prefs.ppd-mode; checked: Prefs.poster;
+        tip: Prefs.ppd-mode ? Strings.not-in-ppd : "";
         picked => { Prefs.poster = true; Prefs.changed(); }
     }
     // 3410: "2" 3521, "4" 3522. 3416: 2x1 3503, 2x2 3500, 3x3 3501, 4x4 3502.
@@ -464,6 +493,6 @@ export component PageLayoutPage inherits Rectangle {
     DlgText { x: 404px; y: 285px; width: 23px; height: 13px; text: "Max"; horizontal-alignment: right; color: #8a8a8a; }
 
     Group { x: 224px; y: 312px; width: 211px; height: 68px; title: "More Options"; }
-    CheckBox { x: 232px; y: 333px; width: 83px; height: 13px; text: "Rotate 180°"; checked <=> Prefs.rotate180; toggled => { Prefs.changed(); } }
-    CheckBox { x: 232px; y: 355px; width: 90px; height: 13px; text: "Mirror Image"; checked <=> Prefs.mirror; toggled => { Prefs.changed(); } }
+    CheckBox { x: 232px; y: 333px; width: 83px; height: 13px; text: "Rotate 180°"; checked <=> Prefs.rotate180; enabled: !Prefs.ppd-mode; tip: Prefs.ppd-mode ? Strings.not-in-ppd : ""; toggled => { Prefs.changed(); } }
+    CheckBox { x: 232px; y: 355px; width: 90px; height: 13px; text: "Mirror Image"; checked <=> Prefs.mirror; enabled: !Prefs.ppd-mode; tip: Prefs.ppd-mode ? Strings.not-in-ppd : ""; toggled => { Prefs.changed(); } }
 }

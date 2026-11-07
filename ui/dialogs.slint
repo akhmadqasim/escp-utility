@@ -81,7 +81,13 @@ export component ColorControlsDialog inherits UtilityWindow {
     in-out property <int> yellow;
     callback ok();
     callback cancel();
-    property <bool> vivid: root.color-mode == 1;
+    // Other printers (src/ppd_sheet.rs): the controls their PPD lacks are greyed out.
+    in property <bool> ppd-mode;
+    in property <bool> has-color-mode: true;
+    in property <bool> has-gamma: true;
+    // Brightness, Contrast, Saturation, Cyan, Magenta, Yellow.
+    in property <[bool]> has-level: [true, true, true, true, true, true];
+    property <bool> vivid: !root.ppd-mode && root.color-mode == 1;
     title: "Color Controls";
     width: 555px;
     client-height: 405px;
@@ -94,6 +100,8 @@ export component ColorControlsDialog inherits UtilityWindow {
         x: 16px; y: 44px; width: 243px;
         model: root.color-mode-labels;
         current-index <=> root.color-mode;
+        enabled: root.has-color-mode;
+        tip: root.has-color-mode ? "" : Strings.not-in-ppd;
         selected => {
             if (root.vivid) {
                 // Gamma 1.8 is not allowed with EPSON Vivid.
@@ -106,8 +114,8 @@ export component ColorControlsDialog inherits UtilityWindow {
         x: 16px; y: 89px; width: 243px;
         model: root.gamma-labels;
         current-index <=> root.gamma;
-        enabled: !root.vivid;
-        tip: root.vivid ? Strings.gamma-vivid : "";
+        enabled: root.has-gamma && !root.vivid;
+        tip: !root.has-gamma ? Strings.not-in-ppd : root.vivid ? Strings.gamma-vivid : "";
     }
     Group { x: 16px; y: 116px; width: 243px; height: 46px; title: "Color Adjustment Method"; page: #f0f0f0; }
     Radio { x: 24px; y: 136px; width: 86px; height: 16px; text: "Color Circle"; enabled: false; tip: "The Linux driver takes the slide-bar values only."; }
@@ -127,13 +135,13 @@ export component ColorControlsDialog inherits UtilityWindow {
     // Left column: Brightness, Contrast, Saturation, Density; right column
     // (Slide Bar mode): Cyan, Magenta, Yellow. Rows 40 px apart (value boxes
     // at y 218, 258, 298, 338).
-    ColorSlider { x: 0; y: 215px; width: 270px; height: 30px; label: "Brightness"; value <=> root.brightness; label-x: 16px; box-x: 74px; slider-x: 117px; }
-    ColorSlider { x: 0; y: 255px; width: 270px; height: 30px; label: "Contrast"; value <=> root.contrast; label-x: 16px; box-x: 74px; slider-x: 117px; }
-    ColorSlider { x: 0; y: 295px; width: 270px; height: 30px; label: "Saturation"; value <=> root.saturation; label-x: 16px; box-x: 74px; slider-x: 117px; }
+    ColorSlider { x: 0; y: 215px; width: 270px; height: 30px; label: "Brightness"; value <=> root.brightness; enabled: root.has-level[0]; tip: root.has-level[0] ? "" : Strings.not-in-ppd; label-x: 16px; box-x: 74px; slider-x: 117px; }
+    ColorSlider { x: 0; y: 255px; width: 270px; height: 30px; label: "Contrast"; value <=> root.contrast; enabled: root.has-level[1]; tip: root.has-level[1] ? "" : Strings.not-in-ppd; label-x: 16px; box-x: 74px; slider-x: 117px; }
+    ColorSlider { x: 0; y: 295px; width: 270px; height: 30px; label: "Saturation"; value <=> root.saturation; enabled: root.has-level[2]; tip: root.has-level[2] ? "" : Strings.not-in-ppd; label-x: 16px; box-x: 74px; slider-x: 117px; }
     ColorSlider { x: 0; y: 335px; width: 270px; height: 30px; label: "Density"; enabled: false; tip: Strings.no-linux; label-x: 16px; box-x: 74px; slider-x: 117px; }
-    ColorSlider { x: 0; y: 215px; width: 555px; height: 30px; label: "Cyan"; value <=> root.cyan; label-x: 302px; box-x: 354px; slider-x: 398px; }
-    ColorSlider { x: 0; y: 255px; width: 555px; height: 30px; label: "Magenta"; value <=> root.magenta; label-x: 302px; box-x: 354px; slider-x: 398px; }
-    ColorSlider { x: 0; y: 295px; width: 555px; height: 30px; label: "Yellow"; value <=> root.yellow; label-x: 302px; box-x: 354px; slider-x: 398px; }
+    ColorSlider { x: 0; y: 215px; width: 555px; height: 30px; label: "Cyan"; value <=> root.cyan; enabled: root.has-level[3]; tip: root.has-level[3] ? "" : Strings.not-in-ppd; label-x: 302px; box-x: 354px; slider-x: 398px; }
+    ColorSlider { x: 0; y: 255px; width: 555px; height: 30px; label: "Magenta"; value <=> root.magenta; enabled: root.has-level[4]; tip: root.has-level[4] ? "" : Strings.not-in-ppd; label-x: 302px; box-x: 354px; slider-x: 398px; }
+    ColorSlider { x: 0; y: 295px; width: 555px; height: 30px; label: "Yellow"; value <=> root.yellow; enabled: root.has-level[5]; tip: root.has-level[5] ? "" : Strings.not-in-ppd; label-x: 302px; box-x: 354px; slider-x: 398px; }
     // Owner-draw colour chips 4352-4354 (17x18).
     for chip[i] in [#00a0e0, #d0168c, #f0c800]: Rectangle {
         x: 278px; y: 218px + i * 40px; width: 17px; height: 18px;
@@ -164,6 +172,36 @@ export component ColorControlsDialog inherits UtilityWindow {
     DlgButton { x: 310px; y: 374px; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
     DlgButton { x: 391px; y: 374px; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
     DlgButton { x: 472px; y: 374px; width: 75px; height: 23px; text: "Help"; enabled: false; tip: Strings.no-help; }
+}
+
+// One PPD option of the Printer Options dialog: its label and the choices
+// its constraints allow.
+export struct OptionRow {
+    label: string,
+    choices: [string],
+    index: int,
+}
+
+// Ours (Advanced > Printer Options..., other printers only): the PPD options
+// that no Windows control takes, such as Duplex, one label and combo each.
+// A pick applies at once (constraints included); Cancel undoes the picks.
+export component PrinterOptionsDialog inherits UtilityWindow {
+    in property <[OptionRow]> rows;
+    callback picked(int, int);
+    callback ok();
+    callback cancel();
+    property <length> buttons-y: 8px + max(1, root.rows.length) * 26px + 12px;
+    title: "Printer Options";
+    width: 420px;
+    client-height: root.buttons-y + 31px;
+    default-action => { root.ok(); }
+    cancel-action => { root.cancel(); }
+    for r[i] in root.rows: Rectangle {
+        DlgText { x: 8px; y: 12px + i * 26px; width: 156px; height: 13px; text: r.label; wrap: no-wrap; overflow: elide; }
+        Combo { x: 172px; y: 8px + i * 26px; width: 240px; model: r.choices; current-index: r.index; selected => { root.picked(i, self.current-index); } }
+    }
+    DlgButton { x: 256px; y: root.buttons-y; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
+    DlgButton { x: 337px; y: root.buttons-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
 }
 
 export enum LayoutKind { Text, CText, Group, Check, Radio, Combo, Edit, Button, Slider, List, Frame, Line, UpDown }

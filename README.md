@@ -164,6 +164,37 @@ driver code and E_FCF0G5P.CFG):
 On Advanced, the four "Paper & Quality Options" combos are read in template
 order as Source, Type, Quality, Size (M).
 
+### Other printers: the PPD sheet
+
+At start the app reads the queue's PPD from cupsd (`GET /printers/<queue>.ppd`
+on localhost:631, `src/ppd.rs`). A PPD whose NickName starts with "Epson L800
+Series - epson-inkjet-printer" keeps everything above. Any other PPD drives the
+same pages (`src/ppd_sheet.rs`), through `ppd::slot_map`: Quality radios =
+PrintQuality, Source = InputSlot, Type = MediaType, Size = PageSize,
+Borderless, Grayscale = `Color=Grayscale` or `Ink=MONO`, Color Mode, Gamma and
+the Color Controls sliders. If cupsd gives no PPD, the L800 keeps its tables
+and other printers get an empty sheet.
+- escpr folds two controls into others, and the sheet takes them apart and
+  puts them back on save. Quality is a MediaType suffix (`PLAIN_NORMAL`):
+  the Type combo lists the base papers and the radios pick the suffix
+  (SUPERDRAFT, DRAFT, NORMAL, HIGH on the first four radios, labelled with
+  the PPD's own words, such as "Standard" and "High"). Borderless is the `T`
+  variant of a PageSize (`TA4`): the Size combo lists the base sizes and the
+  Borderless radio picks the variant. The Advanced quality combo lists the
+  paper's qualities.
+- Lists show only the choices the PPD's `*UIConstraints` allow with the
+  other values; after an edit, `ppd::resolve` settles the rest (the edited
+  option wins, others fall back to their default, else their first allowed
+  choice).
+- A control whose option the PPD lacks is greyed out with a tooltip, in
+  place. The L800 PPD's own options (Reduce/Enlarge, Poster Printing, Rotate
+  180°, Mirror Image) and the L800 presets are greyed out too.
+- Options no control takes (escpr: Duplex) are in Advanced > Printer
+  Options..., one label and combo each.
+- Saving stays `lpoptions -p <queue> -o key=value`: every PPD option except
+  PageRegion, plus the CUPS options of the L800 sheet (orientation, output
+  order, pages per sheet, copies, collate).
+
 ## What works
 
 | Maintenance item | State |
@@ -174,7 +205,7 @@ order as Source, Type, Quality, Size (M).
 | EPSON Status Monitor 3 | Works: status title and message from the Windows status table, approximate levels of the 6 ink tanks, polled every 5 s while open. [Print Queue] opens the GNOME printer settings |
 | Printer and Option Information | Shows how the app identified the printer (make and model, device URI, IEEE 1284 device ID and its source, the two gates below) and what CUPS reports for the queue (`lpstat -l -p/-v/-a/-o`), read-only |
 | Paper Guide Cleaning | Works like Windows on the L800, which is a no-op: pre-check, dialog 265 [Cancel] [**Cleaning**], then the paused/offline re-check, and **no bytes are sent**. Windows looks for its script RCDATA 1900, which does not exist in the L800 data DLL (`E_IHBRG5P`), so `FUN_00407dc4` opens and closes an empty RAW job. Then the dialog closes (rea/NOTES.md §5). In `--dry-run` a message says so, with any queue note |
-| Driver Update | Opens Epson's L800 Linux download page with `xdg-open`. Windows runs Epson's own updater (`E_GUPA30.EXE`), which has no Linux equivalent |
+| Driver Update | Opens Epson's Linux download page for the model with `xdg-open` (`device_id` = the MDL without " Series"; the L800 link is unchanged, the other models' links are not verified). Windows runs Epson's own updater (`E_GUPA30.EXE`), which has no Linux equivalent |
 | Print Head Alignment | Disabled. Its tooltip says why: it writes permanent calibration values (`DD`/`SV`) to the printer, so it stays off until a test run is approved |
 | Speed & Progress... | Disabled. Its tooltip says why: these are Windows print-spooler settings only. Monitoring Preferences lives inside this dialog on Windows |
 | Language | English only (the driver has no other UI strings) |
@@ -345,6 +376,8 @@ and the pre-check result. It refuses while the queue has jobs.
 cargo build --release
 cargo test
 cargo test -- --ignored   # start-up smoke test: opens a window for 3 s
+# PPD fixtures (Epson's files, never committed); the tests skip without them:
+PPD_FIXTURES=/path/with/L800.ppd ESCPR_PPD_DIR=/path/to/escpr-ppd cargo test
 ./target/release/epson-l800-utility --dry-run      # safe: writes files, never calls lp
 ./target/release/epson-l800-utility                # live: sends to the Epson CUPS queue
 ```
@@ -391,7 +424,8 @@ release binary. Its right-click action "Dry Run" starts the app with `--dry-run`
 
 Layout screenshots without a display:
 `cargo run --example screenshot -- OUT_DIR` writes one PPM per window, using
-Slint's software renderer.
+Slint's software renderer. With `ESCPR_PPD_DIR` set it also renders the L805
+PPD sheet (Main, Advanced, Page Layout) and the ET-2750 Printer Options.
 
 ## Commands and evidence
 
@@ -507,6 +541,9 @@ Errors:         queue paused / not accepting / lp failed --> 271;  ST=00 before 
   cleaning-progress logic
 - `packaging/70-epson-l800-utility.rules`: udev rule for status access
 - `src/main.rs`: flows (dialog sequence) and command-line options
+- `src/ppd.rs`: PPD fetch from cupsd, parser, `*UIConstraints`, `resolve`, slot map
+- `src/ppd_sheet.rs`: the pages for any other PPD (escpr decomposition, lists,
+  edits, save)
 - `src/settings.rs`: Printing Preferences tables (Windows label ↔ PPD value),
   load/save with `lpoptions`, constraints, presets
 - `ui/app.slint`: the property sheet, the Maintenance page and the utility

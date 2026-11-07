@@ -399,7 +399,7 @@ impl Values {
 }
 
 /// `Key/Label: a *b c` lines -> Key -> b.
-fn parse_ppd_listing(text: &str) -> BTreeMap<String, String> {
+pub fn parse_ppd_listing(text: &str) -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
     for line in text.lines() {
         let Some((head, choices)) = line.split_once(": ") else { continue };
@@ -412,7 +412,7 @@ fn parse_ppd_listing(text: &str) -> BTreeMap<String, String> {
 }
 
 /// `a=1 b='x y' c` -> {a: 1, b: x y, c: ""}.
-fn parse_dest_options(text: &str) -> BTreeMap<String, String> {
+pub fn parse_dest_options(text: &str) -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
     let mut chars = text.chars().peekable();
     loop {
@@ -456,9 +456,10 @@ fn lpoptions(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
-/// Current per-user values for `queue` (read-only queries to cupsd).
-pub fn load(queue: &str) -> Result<Values, String> {
-    Ok(Values::parse(&lpoptions(&["-p", queue, "-l"])?, &lpoptions(&["-p", queue])?))
+/// `lpoptions -p Q -l` (PPD options) and `lpoptions -p Q` (destination
+/// options): read-only queries to cupsd.
+pub fn load_raw(queue: &str) -> Result<(String, String), String> {
+    Ok((lpoptions(&["-p", queue, "-l"])?, lpoptions(&["-p", queue])?))
 }
 
 /// The command that saves `v` for this user (written to ~/.cups/lpoptions).
@@ -471,8 +472,8 @@ pub fn save_args(queue: &str, v: &Values) -> Vec<String> {
     args
 }
 
-pub fn save(queue: &str, v: &Values) -> Result<(), String> {
-    let args = save_args(queue, v);
+/// Run `lpoptions` with save arguments (`save_args`, `ppd_sheet::save_args`).
+pub fn save(args: &[String]) -> Result<(), String> {
     lpoptions(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(|_| ())
 }
 

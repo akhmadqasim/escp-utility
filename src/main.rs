@@ -6,6 +6,8 @@
 
 mod commands;
 mod layouts;
+mod ppd;
+mod ppd_sheet;
 mod printer;
 mod profile;
 mod report;
@@ -31,8 +33,18 @@ use status::{CleaningMonitor, Precheck, QueryError, Status, Step};
 use texts::*;
 use transport::{Mode, Sent};
 
-/// Epson's download page for the L800 Linux drivers (Windows runs its own updater, E_GUPA30.EXE).
-const DRIVER_PAGE: &str = "https://download-center.epson.com/softwares/?device_id=L800&region=ID&os=DEBX64&language=en";
+/// Epson's Linux driver download page for the printer's model (Windows runs
+/// its own updater, E_GUPA30.EXE): device_id is the IEEE 1284 MDL without a
+/// trailing " Series" (the L800 page is `device_id=L800`).
+fn driver_page(mdl: Option<&str>) -> String {
+    let device = mdl.map(|m| m.strip_suffix(" Series").unwrap_or(m).replace(' ', "%20"));
+    let device = device.map_or(String::new(), |d| format!("device_id={d}&"));
+    format!("https://download-center.epson.com/softwares/?{device}region=ID&os=DEBX64&language=en")
+}
+
+/// The L800 PPD keeps the Windows tables (settings.rs); any other PPD
+/// drives the same pages through ppd_sheet.rs.
+const L800_NICKNAME: &str = "Epson L800 Series - epson-inkjet-printer";
 
 /// Wayland app_id / X11 WM_CLASS; matches the desktop file and icon name.
 const APP_ID: &str = "epson-l800-utility";
@@ -232,6 +244,17 @@ struct Progress {
     in_flight: bool,
 }
 
+/// The pages of a printer other than the L800 (ppd_sheet.rs).
+struct PpdState {
+    sheet: ppd_sheet::Sheet,
+    /// Complete and conflict-free.
+    sel: RefCell<ppd::Selection>,
+    /// What the pages show for `sel`.
+    view: RefCell<ppd_sheet::View>,
+    /// The selection when Printer Options opened: its Cancel restores it.
+    before: RefCell<Option<ppd::Selection>>,
+}
+
 struct App {
     mode: Mode,
     /// The queue and the printer behind it.
@@ -256,6 +279,9 @@ struct App {
     current_settings: Lazy<CurrentSettingsDialog>,
     color_controls: Lazy<ColorControlsDialog>,
     layout_dialog: Lazy<LayoutDialog>,
+    printer_options: Lazy<PrinterOptionsDialog>,
+    /// Any printer but the L800: the PPD sheet (None: the L800 tables).
+    ppd: Option<PpdState>,
     /// The last pre-check got a status reply (Windows +0x51C / +0x6C).
     have_status: Cell<bool>,
     progress_state: RefCell<Progress>,
@@ -271,7 +297,7 @@ impl App {
     /// The property sheet; the dialogs are created when first opened.
     /// `profile`: the one matching the printer's MDL. Without one, the
     /// maintenance jobs need an ESC/P device ID, and use the generic profile.
-    fn new(mode: Mode, printer: Identity, profile: Option<Profile>) -> Result<Rc<App>, slint::PlatformError> {
+    fn new(mode: Mode, printer: Identity, profile: Option<Profile>, sheet: Option<ppd_sheet::Sheet>) -> Result<Rc<App>, slint::PlatformError> {
         let main = MainWindow::new()?;
         let profiled = profile.is_some();
         let profile = profile.unwrap_or_else(Profile::generic);
@@ -302,6 +328,13 @@ impl App {
             current_settings: Lazy::new(dialogs::current_settings),
             color_controls: Lazy::new(dialogs::color_controls),
             layout_dialog: Lazy::new(dialogs::layout_dialog),
+            printer_options: Lazy::new(dialogs::printer_options),
+            ppd: sheet.map(|sheet| PpdState {
+                sheet,
+                sel: RefCell::default(),
+                view: RefCell::default(),
+                before: RefCell::default(),
+            }),
             have_status: Cell::new(false),
             progress_state: RefCell::new(Progress::default()),
             poll_timer: Timer::default(),
@@ -342,6 +375,7 @@ impl App {
             shown(&self.dump),
             shown(&self.color_controls),
             shown(&self.layout_dialog),
+            shown(&self.printer_options),
         ];
         self.main.set_busy(self.settings_io.get() || open.contains(&true));
     }
@@ -446,8 +480,70 @@ impl App {
         .constrained()
     }
 
+    /// Show a PPD selection on the pages.
+    fn ppd_set(&self, st: &PpdState, sel: ppd::Selection) {
+        let v = st.sheet.view(&sel);
+        ppd_sheet::show(&self.main.global::<Prefs>(), &v);
+        *st.sel.borrow_mut() = sel;
+        *st.view.borrow_mut() = v;
+        self.refresh_current_settings();
+    }
+
+    /// Apply an edit on the pages of the PPD sheet.
+    fn ppd_edit(&self, st: &PpdState, e: &ppd_sheet::Edit) {
+        let sel = st.sheet.apply(&st.sel.borrow(), e);
+        self.ppd_set(st, sel);
+    }
+
+    /// The PPD sheet's sub-dialogs: Color Controls and Printer Options.
+    fn open_ppd_dialog(&self, st: &PpdState, id: &str) {
+        let v = st.view.borrow();
+        match id {
+            "color-controls" => {
+                let d = &self.color_controls;
+                d.set_ppd_mode(true);
+                d.set_color_mode_labels(strings(v.color_mode.labels()));
+                d.set_color_mode(v.color_mode.pos as i32);
+                d.set_gamma_labels(strings(v.gamma.labels()));
+                d.set_gamma(v.gamma.pos as i32);
+                d.set_has_color_mode(v.color_mode.present);
+                d.set_has_gamma(v.gamma.present);
+                d.set_has_level(slint::VecModel::from_slice(&v.levels.map(|l| l.is_some())));
+                let l = v.levels.map(|l| l.unwrap_or(0));
+                d.set_brightness(l[0]);
+                d.set_contrast(l[1]);
+                d.set_saturation(l[2]);
+                d.set_cyan(l[3]);
+                d.set_magenta(l[4]);
+                d.set_yellow(l[5]);
+                self.open(d);
+            }
+            "printer-options" => {
+                *st.before.borrow_mut() = Some(st.sel.borrow().clone());
+                self.printer_options.set_rows(slint::VecModel::from_slice(&ppd_sheet::option_rows(&v)));
+                self.open(&self.printer_options);
+            }
+            _ => {}
+        }
+    }
+
+    /// Printer Options [Cancel] or close box: undo its picks.
+    fn printer_options_cancel(&self) {
+        if let Some(st) = &self.ppd
+            && let Some(sel) = st.before.borrow_mut().take()
+        {
+            self.ppd_set(st, sel);
+        }
+        self.close(&self.printer_options);
+    }
+
     /// The sub-dialogs of the settings pages.
     fn open_dialog(&self, id: &str) {
+        if let Some(st) = &self.ppd
+            && matches!(id, "color-controls" | "printer-options")
+        {
+            return self.open_ppd_dialog(st, id);
+        }
         let layout = match id {
             "color-controls" => {
                 let v = self.prefs();
@@ -486,6 +582,16 @@ impl App {
     /// Color Controls [OK]: take its values into the sheet (Apply/OK saves them).
     fn color_controls_ok(&self) {
         let d = &self.color_controls;
+        if let Some(st) = &self.ppd {
+            let row = |i: i32| usize::try_from(i).unwrap_or(0);
+            let levels = [d.get_brightness(), d.get_contrast(), d.get_saturation(), d.get_cyan(), d.get_magenta(), d.get_yellow()];
+            let edits = st.sheet.color_edits(&st.view.borrow(), row(d.get_color_mode()), row(d.get_gamma()), levels);
+            for e in &edits {
+                self.ppd_edit(st, e);
+            }
+            self.main.global::<Prefs>().set_dirty(true);
+            return self.close(d);
+        }
         let mut v = self.prefs();
         v.color_mode = usize::try_from(d.get_color_mode()).unwrap_or(1);
         v.gamma = usize::try_from(d.get_gamma()).unwrap_or(1);
@@ -506,8 +612,28 @@ impl App {
     fn refresh_current_settings(&self) {
         use settings::*;
         let Some(dialog) = Lazy::get(&self.current_settings) else { return };
-        let v = self.prefs();
         let on_off = |b: bool| if b { "On" } else { "Off" }.to_string();
+        if let Some(st) = &self.ppd {
+            let (v, p) = (st.view.borrow(), self.main.global::<Prefs>());
+            let at = |f: &ppd_sheet::Field| f.items.get(f.pos).map_or("-".to_string(), |(_, l)| l.clone());
+            let s = ppd_sheet::std_of(&p);
+            let lines = [
+                ("Paper Source", at(&v.source)),
+                ("Paper Type", at(&v.media)),
+                ("Quality", v.quality.map_or("-".to_string(), |r| v.quality_labels[r].clone())),
+                ("Document Size", at(&v.size)),
+                ("Borderless", on_off(v.borderless)),
+                ("Orientation", if s.landscape { "Landscape" } else { "Portrait" }.to_string()),
+                ("Reverse Order", on_off(s.reverse)),
+                ("Grayscale", on_off(v.grayscale == Some(true))),
+                ("Color Mode", at(&v.color_mode)),
+                ("Page Layout", if s.multi_page { format!("Pages per Sheet {}", PAGES_PER_SHEET[s.pages_index]) } else { "Off".into() }),
+            ];
+            let lines: Vec<SettingLine> =
+                lines.into_iter().map(|(label, value)| SettingLine { label: label.into(), value: value.into() }).collect();
+            return dialog.set_lines(slint::VecModel::from_slice(&lines));
+        }
+        let v = self.prefs();
         let lines = [
             ("Paper Source", SOURCES[v.source].label.to_string()),
             ("Paper Type", MEDIA[v.media].label.to_string()),
@@ -548,9 +674,12 @@ impl App {
         // Number edits commit: their text now shows the (clamped) value saved.
         let p = self.main.global::<Prefs>();
         p.set_commit_tick(p.get_commit_tick() + 1);
-        let v = self.prefs();
+        let queue = &self.printer.queue;
+        let args = match &self.ppd {
+            Some(st) => ppd_sheet::save_args(queue, &st.sheet, &st.sel.borrow(), &ppd_sheet::std_of(&p)),
+            None => settings::save_args(queue, &self.prefs()),
+        };
         if self.dry_run() {
-            let args = settings::save_args(&self.printer.queue, &v);
             self.dump.set_caption("Dry run".into());
             self.dump.set_heading("Dry run: these settings were not saved. A real run would run this command:".into());
             self.dump.set_content(format!("lpoptions {}\n", args.join(" \\\n    ")).into());
@@ -560,8 +689,7 @@ impl App {
         }
         self.settings_io.set(true);
         self.refresh_busy();
-        let queue = self.printer.queue.clone();
-        bg(move || (quit, settings::save(&queue, &v)), |app, (quit, res)| {
+        bg(move || (quit, settings::save(&args)), |app, (quit, res)| {
             app.settings_io.set(false);
             app.refresh_busy();
             match res {
@@ -1111,24 +1239,41 @@ fn main() -> Result<(), slint::PlatformError> {
             None => return Ok(()),
         },
     };
-    let printer = Identity::of(&queue);
+    // The queue's PPD from cupsd (read-only): the sheet, and the device ID
+    // when no USB one is cached.
+    let ppd = ppd::fetch(&queue).and_then(|t| ppd::parse(&t)).inspect_err(|e| eprintln!("epson-l800-utility: {e}")).ok();
+    let printer = Identity::of(&queue, ppd.as_ref().and_then(|p| p.device_id.as_deref()));
     let profile = profile::find(&profiles, printer.id.mdl()).cloned();
-    let app = App::new(args.dump_dir.map_or(Mode::Live, Mode::DryRun), printer, profile)?;
+    let sheet = match ppd {
+        Some(p) if p.nickname.as_deref().is_some_and(|n| n.starts_with(L800_NICKNAME)) => None,
+        Some(p) => Some(ppd_sheet::Sheet::new(p)),
+        // No PPD: the L800 keeps its tables; other printers get an empty sheet.
+        None if profile.as_ref().is_some_and(Profile::l800_windows) => None,
+        None => Some(ppd_sheet::Sheet::new(ppd::Ppd::default())),
+    };
+    let app = App::new(args.dump_dir.map_or(Mode::Live, Mode::DryRun), printer, profile, sheet)?;
     APP.with(|a| *a.borrow_mut() = Rc::downgrade(&app));
     app.main.set_dry_run(app.dry_run());
     app.main.set_current_tab(if args.utility { 4 } else { 1 });
     fill_lists(&app.main.global::<Prefs>());
-    app.set_prefs(&Values::default());
+    match &app.ppd {
+        Some(st) => app.ppd_set(st, st.sheet.defaults()),
+        None => app.set_prefs(&Values::default()),
+    }
     // The sheet waits for the load, so no early edit (or OK) is lost to it.
     app.settings_io.set(true);
     app.refresh_busy();
     let queue = app.printer.queue.clone();
-    bg(move || settings::load(&queue), |app, res| {
+    bg(move || settings::load_raw(&queue), |app, res| {
         app.settings_io.set(false);
         app.refresh_busy();
-        match res {
-            Ok(v) => app.set_prefs(&v),
-            Err(e) => eprintln!("epson-l800-utility: cannot read the printing preferences: {e}"),
+        match (res, &app.ppd) {
+            (Ok((listing, dest)), Some(st)) => {
+                app.ppd_set(st, st.sheet.read_listing(&listing));
+                ppd_sheet::show_std(&app.main.global::<Prefs>(), &ppd_sheet::Std::parse(&dest));
+            }
+            (Ok((listing, dest)), None) => app.set_prefs(&Values::parse(&listing, &dest)),
+            (Err(e), _) => eprintln!("epson-l800-utility: cannot read the printing preferences: {e}"),
         }
     });
     // The Ink Levels boxes on Main and Shortcuts: one status query when the
@@ -1203,8 +1348,8 @@ fn wire(ui: &App) {
         }
     });
     // Windows runs Epson's own updater (E_GUPA30.EXE); on Linux we open
-    // Epson's driver download page for the L800 instead.
-    ui.main.on_driver_update(|| launch("xdg-open", DRIVER_PAGE));
+    // Epson's driver download page for the model instead.
+    ui.main.on_driver_update(on(|a| launch("xdg-open", &driver_page(a.printer.id.mdl()))));
     // OK = save + close, Apply = save, Cancel (or the close box) = discard.
     ui.main.on_ok(on(|a| a.save_prefs(true)));
     ui.main.on_apply(on(|a| a.save_prefs(false)));
@@ -1217,11 +1362,34 @@ fn wire(ui: &App) {
     });
     let prefs = ui.main.global::<Prefs>();
     // After every edit: re-apply the constraints and refill the lists.
-    prefs.on_edited(on(|a| a.set_prefs(&a.prefs())));
+    prefs.on_edited(on(|a| match &a.ppd {
+        // The PPD sheet: the control that changed, as an edit (else show
+        // the selection again). No RefCell borrow may span ppd_set.
+        Some(st) => {
+            let e = st.sheet.edit_from(&a.main.global::<Prefs>(), &st.view.borrow());
+            match e {
+                Some(e) => a.ppd_edit(st, &e),
+                None => {
+                    let sel = st.sel.borrow().clone();
+                    a.ppd_set(st, sel);
+                }
+            }
+        }
+        None => a.set_prefs(&a.prefs()),
+    }));
     prefs.on_pick(|list, row| {
         let Some(a) = app() else { return };
-        let mut v = a.prefs();
         let row = usize::try_from(row).unwrap_or(0);
+        if let Some(st) = &a.ppd {
+            let e = st.sheet.pick(&st.view.borrow(), &list, row);
+            if let Some(e) = e {
+                a.ppd_edit(st, &e);
+            }
+            let p = a.main.global::<Prefs>();
+            p.set_dirty(true);
+            return p.set_preset(-1);
+        }
+        let mut v = a.prefs();
         match list.as_str() {
             "media" => v.media = v.media_list().get(row).copied().unwrap_or(v.media),
             "size" => v.size = v.size_list().get(row).copied().unwrap_or(v.size),
@@ -1242,13 +1410,23 @@ fn wire(ui: &App) {
     // Show Settings / Hide Settings toggles the Current Settings window.
     prefs.on_toggle_settings(on(|a| a.show_settings(!a.main.global::<Prefs>().get_settings_shown())));
     prefs.on_reset_defaults(on(|a| {
-        a.set_prefs(&Values::default());
+        match &a.ppd {
+            Some(st) => {
+                a.ppd_set(st, st.sheet.defaults());
+                ppd_sheet::show_std(&a.main.global::<Prefs>(), &ppd_sheet::Std::default());
+            }
+            None => a.set_prefs(&Values::default()),
+        }
         let p = a.main.global::<Prefs>();
         p.set_dirty(true);
         p.set_preset(-1);
     }));
     prefs.on_preset_picked(|i| {
         let (Some(a), Some(preset)) = (app(), usize::try_from(i).ok().and_then(|i| settings::PRESETS.get(i))) else { return };
+        // The presets are the L800's (the list is off for other printers).
+        if a.ppd.is_some() {
+            return;
+        }
         let mut v = a.prefs();
         preset.apply(&mut v);
         a.set_prefs(&v);
@@ -1402,6 +1580,29 @@ mod dialogs {
         d
     }
 
+    pub fn printer_options() -> PrinterOptionsDialog {
+        let d = make(PrinterOptionsDialog::new);
+        d.on_picked(|i, row| {
+            let Some(a) = app() else { return };
+            let Some(st) = &a.ppd else { return };
+            let e = st.sheet.option_pick(&st.view.borrow(), usize::try_from(i).unwrap_or(0), usize::try_from(row).unwrap_or(0));
+            if let Some(e) = e {
+                a.ppd_edit(st, &e);
+                a.printer_options.set_rows(slint::VecModel::from_slice(&ppd_sheet::option_rows(&st.view.borrow())));
+                let p = a.main.global::<Prefs>();
+                p.set_dirty(true);
+                p.set_preset(-1);
+            }
+        });
+        d.on_ok(on(|a| a.close(&a.printer_options)));
+        d.on_cancel(on(|a| a.printer_options_cancel()));
+        d.window().on_close_requested(|| {
+            Timer::single_shot(Duration::ZERO, on(|a| a.printer_options_cancel()));
+            slint::CloseRequestResponse::KeepWindowShown
+        });
+        d
+    }
+
     pub fn layout_dialog() -> LayoutDialog {
         let d = make(LayoutDialog::new);
         d.on_dismiss(on(|a| a.close(&a.layout_dialog)));
@@ -1429,7 +1630,7 @@ mod tests {
     #[test]
     fn reload_restores_the_sheet() {
         let _ = slint::platform::set_platform(Box::new(Headless));
-        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }, None).unwrap();
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }, None, None).unwrap();
         let p = app.main.global::<Prefs>();
         fill_lists(&p);
         let d = Values::default;
@@ -1457,7 +1658,7 @@ mod tests {
     #[test]
     fn copies_are_clamped_and_committed() {
         let _ = slint::platform::set_platform(Box::new(Headless));
-        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }, None).unwrap();
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }, None, None).unwrap();
         let p = app.main.global::<Prefs>();
         fill_lists(&p);
         p.set_copies(0);
@@ -1469,6 +1670,56 @@ mod tests {
         app.save_prefs(false); // dry run: shows the command, saves nothing
         assert_eq!(p.get_commit_tick(), tick + 1);
         assert!(!p.get_dirty());
+    }
+
+    /// The old fixed L800 link stays the L800's; other models get theirs.
+    #[test]
+    fn driver_pages() {
+        assert_eq!(driver_page(Some("L800")), "https://download-center.epson.com/softwares/?device_id=L800&region=ID&os=DEBX64&language=en");
+        assert!(driver_page(Some("ET-2750 Series")).contains("?device_id=ET-2750&"));
+        assert!(driver_page(Some("WF-C5790 Series")).contains("device_id=WF-C5790&"));
+        assert!(driver_page(None).starts_with("https://download-center.epson.com/softwares/?region=ID&"));
+    }
+
+    /// PPD_FIXTURES: the L800 PPD keeps the Windows tables; an escpr L805
+    /// does not (ESCPR_PPD_DIR).
+    #[test]
+    fn l800_nickname_picks_the_windows_tables() {
+        let Ok(dir) = std::env::var("PPD_FIXTURES") else { return eprintln!("PPD_FIXTURES unset: skipped") };
+        let p = ppd::parse(&std::fs::read_to_string(PathBuf::from(dir).join("L800.ppd")).unwrap()).unwrap();
+        assert!(p.nickname.unwrap().starts_with(L800_NICKNAME));
+        assert!(!"EPSON L805 Series , Epson Inkjet Printer Driver (ESC/P-R) for Linux".starts_with(L800_NICKNAME));
+    }
+
+    /// The PPD sheet on the pages: an edit there comes back as the right
+    /// PPD choice, and Reset Defaults restores the PPD's.
+    #[test]
+    fn ppd_sheet_on_the_pages() {
+        let Ok(dir) = std::env::var("ESCPR_PPD_DIR") else { return eprintln!("ESCPR_PPD_DIR unset: skipped") };
+        let text = std::fs::read_to_string(PathBuf::from(dir).join("Epson-L805_Series-epson-escpr-en.ppd")).unwrap();
+        let sheet = ppd_sheet::Sheet::new(ppd::parse(&text).unwrap());
+        let _ = slint::platform::set_platform(Box::new(Headless));
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L805".into(), ..Default::default() }, None, Some(sheet)).unwrap();
+        let p = app.main.global::<Prefs>();
+        fill_lists(&p);
+        let st = app.ppd.as_ref().unwrap();
+        app.ppd_set(st, st.sheet.defaults());
+        assert!(p.get_ppd_mode() && !p.get_has_source() && p.get_has_media());
+        // The High radio, as the page sets it.
+        p.set_quality(3);
+        let e = st.sheet.edit_from(&p, &st.view.borrow()).unwrap();
+        app.ppd_edit(st, &e);
+        assert_eq!(st.sel.borrow()["MediaType"], "PLAIN_HIGH");
+        // Grayscale on: Ink=MONO.
+        p.set_grayscale(true);
+        let e = st.sheet.edit_from(&p, &st.view.borrow()).unwrap();
+        app.ppd_edit(st, &e);
+        assert_eq!(st.sel.borrow()["Ink"], "MONO");
+        p.set_copies(2);
+        app.save_prefs(false); // dry run: shows the command
+        let shown = app.dump.get_content().to_string();
+        assert!(shown.contains("MediaType=PLAIN_HIGH") && shown.contains("Ink=MONO") && shown.contains("copies=2"), "{shown}");
+        assert!(!shown.contains("PageRegion"));
     }
 
     fn args(v: &[&str]) -> Result<Args, String> {
