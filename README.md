@@ -1,9 +1,11 @@
 # Epson L800 Utility for Linux
 
 A small Rust + [Slint](https://slint.dev) (fluent style) desktop app that
-reproduces the **Maintenance** tab of the Windows Epson L800 printer driver: the
-same layout, labels, buttons and step-by-step dialogs. Everything shown was
-derived from the Windows driver's own resources and code (driver family "G5P").
+reproduces the Windows Epson L800 driver's **Printing Preferences** window: the
+five tabs (Shortcuts, Main, Advanced, Page Layout, Maintenance) with the same
+layout, labels and buttons, plus the Maintenance utilities and their
+step-by-step dialogs. Everything shown was derived from the Windows driver's
+own resources and code (driver family "G5P").
 
 It contains no Epson code, icons or bitmaps. The pictures in `ui/icons/` are
 our own SVGs, drawn at the size and position where Windows draws its bitmaps.
@@ -22,10 +24,86 @@ as the Windows texts.
   Windows, which spools a `RAW` job. CUPS keeps the USB device, so the app does
   not compete with the CUPS usb backend or with Epson's `ecbd`.
 - **`--dry-run`** never calls `lp`. It writes the exact job bytes to a file and
-  shows a hexdump.
+  shows a hexdump. It also never saves settings; it shows the `lpoptions`
+  command instead.
 - A nozzle check uses one sheet of paper. A cleaning uses ink, and a Power
   Cleaning uses much more ink. As of this version, none of these jobs has
   been sent to a real printer. Try `--dry-run` first.
+
+## Printing Preferences
+
+The window is the Windows property sheet. E_IUICG5P adds five pages in this
+order: **Shortcuts** (904), **Main** (900), **Advanced** (901), **Page Layout**
+(902) and **Maintenance** (903). Each tab has our own 16x16 icon. Every page is
+443x434 px, laid out at the rectangles in LAYOUT.json. The sheet buttons are
+**OK** (save and close), **Cancel** (discard) and **Apply** (save; enabled only
+after a change). Help is left out because there is no help file.
+
+The app opens on Main. `--utility` opens it on Maintenance, which is what
+Windows does for its utility launch code (EPUT). The desktop entry uses
+`--utility`; its "Printing Preferences" action opens Main.
+
+**Storage.** Settings are saved per user with `lpoptions -p L800 -o key=value`
+(`~/.cups/lpoptions`), as SETTINGS.md §3 recommends:
+- That is the Linux equivalent of Windows' per-user preferences, and it needs
+  no root.
+- GTK/GNOME print dialogs and `lp` apply it.
+- `lpadmin` is not used, because the queue is shared.
+- On start the values are read back with `lpoptions -p L800 -l` and
+  `lpoptions -p L800`.
+
+**What maps** (SETTINGS.md §2; lists from §1, which match the PPD 1:1):
+
+| Windows control | Linux option |
+|---|---|
+| Quality Option (Main radios, Advanced combo) | `PrintQuality` Draft/Text/TextImage/Photo/BestPhoto |
+| Source, Type, Size | `InputSlot`, `MediaType`, `PageSize` (Windows labels, PPD values) |
+| Borders / Borderless | `Borderless` |
+| Orientation | `orientation-requested` 3/4 |
+| Reverse Order (Main and Page Layout) | `outputorder` |
+| Grayscale | `Color=Grayscale` |
+| Color Mode, Gamma | `CorrectionColor`, `GammaValue` |
+| Reduce/Enlarge: By Output Paper Size / By Percentage | `ReduceEnlarge`, `OutputPaper`, `ScaleRatio` (10-400 %) |
+| Multi-Page: Pages per Sheet (2, 4) / Print Page Borders | `number-up`, `page-border` |
+| Multi-Page: Poster Printing (2, 4, 9, 16 sheets) | `PosterPrinting` 2x1/2x2/3x3/4x4 |
+| Copies, Collate | `copies`, `collate` |
+| Rotate 180°, Mirror Image | `Rotate180`, `MirrorImage` |
+| Shortcuts: Printing Presets (7, from E_FUIXG5P.XML) | they set source, type, size, borderless and orientation |
+| Reset Defaults | the PPD defaults |
+
+The presets' QUALITY/SPEED and colour fields have no known mapping, so the
+presets leave quality and colour alone.
+
+**Constraints.** These are enforced like the Windows driver greys controls
+out (PPD UIConstraints, SETTINGS.md §1):
+- Borderless is offered only for the photo papers and Epson Photo Quality Ink
+  Jet, at A4, Letter, 10x15, 13x18, 9x13, 16:9 and 100x148.
+- CD/DVD (as source or type) uses A4.
+- A3, A3+, A2, B4 and B3 force Reduce/Enlarge on.
+- EPSON Vivid allows only gamma 2.2.
+
+**Disabled, with a tooltip saying why:**
+- No Linux equivalent: PhotoEnhance, Fix Red-Eye, Edge Smoothing, High Speed,
+  the PhotoEnhance and ICM colour-management modes, 2-sided printing with
+  Margins and Folded Booklet, Page Order, Poster settings, and the borderless
+  Enlargement Method and Expansion.
+- Windows-only: Print Preview, Show this screen first, Technical Support, How
+  to Buy, Save Settings / custom settings, preset Add/Remove/Reset.
+- **Watermark** is shown but off. The installed PPD's watermark data paths
+  point at `/home/epson/projects/...`, which does not exist, so the filter could
+  not draw them.
+- Not built yet: Color Controls (Settings..., six sliders that map to
+  `BrightnessValue` … `YellowValue`) and Watermark Settings.
+- Not in the UI: "User Defined" paper size, and the Linux-only CD/DVD print
+  position options.
+
+**Not settled yet:** some Windows templates stack several model-dependent
+controls on the same spot, for example Black Ink Only / Grayscale, Quiet Mode /
+Fast Mode, and the Ink Levels box with or without How to Buy. Those are left
+out until their L800 visibility is confirmed (phase2/rea/SETTINGS-visibility.md).
+The Ink Levels boxes are drawn empty; their tooltip points to Status Monitor 3.
+On Advanced, the four "Paper & Quality Options" combos are read in template
+order as Source, Type, Quality, Size (M).
 
 ## What works
 
@@ -203,7 +281,8 @@ in `ui/app.slint`.
 
 | Screen | Windows source | Size | Contents |
 |---|---|---|---|
-| Main window | property sheet + `E_IUIRG5P` dialog 903 "Maintenance" | page 443×434 | 6 rows (icon button 41×42, title, etched line, description), Language, Speed & Progress..., Driver Update, version, [Close] |
+| Main window | property sheet: tabs 904, 900, 901, 902, 903 (`E_IUIRG5P`) | 459×505 (pages 443×434) | [**OK**] [Cancel] [Apply] |
+| Maintenance tab | dialog 903 | 443×434 | 6 rows (icon button 41×42, title, etched line, description), Language, Speed & Progress..., Driver Update, version |
 | Please wait... | `E_IHSRG5P` 201 | 240×65 | icon, "Please wait..." |
 | Nozzle Check 1 | 210 | 420×374 | picture, instructions, [Cancel] [**Print**] |
 | Nozzle Check 2 | 211 | 435×414 | Good / Cleaning needed samples, instructions, [Clean] [**Finish**] |
@@ -261,6 +340,10 @@ Errors:         queue paused / not accepting / lp failed --> 271;  ST=00 before 
   cleaning-progress logic
 - `packaging/70-epson-l800-utility.rules`: udev rule for status access
 - `src/main.rs`: flows (dialog sequence) and command-line options
-- `ui/app.slint`: all windows, at the Windows pixel rectangles
+- `src/settings.rs`: Printing Preferences tables (Windows label ↔ PPD value),
+  load/save with `lpoptions`, constraints, presets
+- `ui/app.slint`: the property sheet, the Maintenance page and the utility
+  dialogs; `ui/pages.slint`: the Shortcuts, Main, Advanced and Page Layout
+  pages; `ui/common.slint`: shared widgets
 - `examples/screenshot.rs`: offscreen render of every window
 - `examples/status.rs`: one read-only status query
