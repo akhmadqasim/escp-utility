@@ -409,7 +409,7 @@ pub mod mock {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::st2;
     use super::mock::MockPrinter;
     use super::*;
@@ -420,7 +420,7 @@ mod tests {
 
     /// Printer replies exactly as captured with usbmon on the live L800
     /// (ecbd session and this client's session were byte-identical).
-    fn script_with(st2: Vec<u8>) -> Vec<(Vec<u8>, Vec<u8>)> {
+    pub(crate) fn script_with(st2: Vec<u8>) -> Vec<(Vec<u8>, Vec<u8>)> {
         let mut data = vec![0x02, 0x02, 0x00, (st2.len() + 6) as u8, 0x00, 0x01];
         data.extend(&st2);
         vec![

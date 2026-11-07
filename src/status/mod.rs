@@ -18,6 +18,8 @@
 pub mod d4;
 pub mod st2;
 mod usblp;
+#[cfg(test)]
+mod e2e;
 
 use std::path::Path;
 use std::process::Command;
@@ -107,6 +109,12 @@ pub fn query_raw(queue: &str, node: Option<&Path>) -> Result<Vec<u8>, QueryError
         return Err(QueryError::Busy);
     }
     let path = node.ok_or_else(|| fail("no /dev/usb/lp* with a status channel for this printer".into()))?;
+    query_node(path)
+}
+
+/// The 1284.4 session on one usblp node, without the CUPS check.
+fn query_node(path: &Path) -> Result<Vec<u8>, QueryError> {
+    let fail = QueryError::Failed;
     let port = usblp::UsbLp::open(path).map_err(|e| fail(format!("{}: {e}", path.display())))?;
     d4::Session::new(port).query().map_err(|e| fail(e.to_string()))
 }

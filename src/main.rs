@@ -1821,3 +1821,181 @@ mod tests {
         }
     }
 }
+
+/// End-to-end UI flows on an in-memory platform with a hand-pumped event
+/// loop: the real App, its real callbacks, dry run, a queue that does not
+/// exist (no status node, so nothing reaches a printer).
+#[cfg(test)]
+mod e2e_ui {
+    use super::*;
+    use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::sync::{Mutex, OnceLock};
+    use std::path::Path;
+
+    type Job = Box<dyn FnOnce() + Send>;
+    type Channel = (Sender<Job>, Mutex<Receiver<Job>>);
+    static QUEUE: OnceLock<Channel> = OnceLock::new();
+    fn queue() -> &'static Channel {
+        QUEUE.get_or_init(|| {
+            let (s, r) = channel();
+            (s, Mutex::new(r))
+        })
+    }
+
+    struct Proxy;
+    impl slint::platform::EventLoopProxy for Proxy {
+        fn quit_event_loop(&self) -> Result<(), slint::EventLoopError> {
+            Ok(())
+        }
+        fn invoke_from_event_loop(&self, f: Job) -> Result<(), slint::EventLoopError> {
+            queue().0.send(f).map_err(|_| slint::EventLoopError::EventLoopTerminated)
+        }
+    }
+
+    struct Pumped;
+    impl slint::platform::Platform for Pumped {
+        fn create_window_adapter(&self) -> Result<Rc<dyn slint::platform::WindowAdapter>, slint::PlatformError> {
+            use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+            Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+        }
+        fn new_event_loop_proxy(&self) -> Option<Box<dyn slint::platform::EventLoopProxy>> {
+            Some(Box::new(Proxy))
+        }
+    }
+
+    /// Run what the worker threads post until `done` holds (10 s at most).
+    fn pump_until(what: &str, done: impl Fn() -> bool) {
+        let end = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(Instant::now() < end, "timed out waiting for: {what}");
+            let job = queue().1.lock().unwrap().recv_timeout(Duration::from_millis(20));
+            if let Ok(f) = job {
+                f();
+            }
+        }
+    }
+
+    fn hex_golden(job: &str) -> Vec<u8> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/L800/").to_string() + job + ".hex";
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .flat_map(|l| l.split_whitespace().map(|b| u8::from_str_radix(b, 16).unwrap()).collect::<Vec<_>>())
+            .collect()
+    }
+
+    /// The 7 clock bytes of the TI command are zeroed.
+    fn mask_ti(mut b: Vec<u8>) -> Vec<u8> {
+        let i = b.windows(5).position(|w| w == b"TI\x08\x00\x00").expect("TI") + 5;
+        b[i..i + 7].fill(0);
+        b
+    }
+
+    /// The single dump file for `job` in `dir`.
+    fn dump(dir: &Path, job: &str) -> Vec<u8> {
+        let files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with(&format!("{job}-")))
+            .collect();
+        assert_eq!(files.len(), 1, "{job} dumps in {}: {files:?}", dir.display());
+        std::fs::read(&files[0]).unwrap()
+    }
+
+    fn l800_app(dir: &Path) -> Rc<App> {
+        let profiles = profile::builtin();
+        let profile = profile::find(&profiles, Some("L800")).cloned();
+        assert!(profile.is_some(), "built-in L800 profile");
+        let id = Identity { queue: "E2E_NO_SUCH_QUEUE".into(), ..Default::default() };
+        let app = App::new(Mode::DryRun(dir.to_path_buf()), id, profile, None).unwrap();
+        APP.with(|a| *a.borrow_mut() = Rc::downgrade(&app));
+        app.main.set_dry_run(true);
+        fill_lists(&app.main.global::<Prefs>());
+        wire(&app);
+        app
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("escp-e2e-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    /// One test: the platform and its event loop proxy are per process.
+    #[test]
+    fn maintenance_and_prefs_end_to_end() {
+        slint::platform::set_platform(Box::new(Pumped)).expect("first platform with a proxy");
+
+        // Nozzle Check: 210 [Print] -> 201 -> 211 [Finish].
+        let dir = scratch("nozzle");
+        let app = l800_app(&dir);
+        app.main.invoke_utility_clicked("nozzle-check".into());
+        assert!(shown(&app.wait), "201 during the pre-check");
+        pump_until("dialog 210", || shown(&app.nozzle));
+        app.nozzle.invoke_print();
+        assert!(shown(&app.wait), "201 while spooling");
+        pump_until("dialog 211", || shown(&app.nozzle_result));
+        assert!(!shown(&app.wait));
+        assert!(shown(&app.dump), "dry run shows the hexdump");
+        app.nozzle_result.invoke_finish();
+        assert!(!shown(&app.nozzle_result));
+        assert_eq!(mask_ti(dump(&dir, "nozzle-check")), mask_ti(hex_golden("nozzle-check")));
+        app.close(&app.dump);
+
+        // Head Cleaning, normal (kind 0): no 360, straight to the job.
+        let dir2 = scratch("clean");
+        let app = l800_app(&dir2);
+        app.main.invoke_utility_clicked("head-cleaning".into());
+        pump_until("dialog 220", || shown(&app.cleaning));
+        app.cleaning.set_kind(0);
+        app.cleaning.invoke_start();
+        assert!(!shown(&app.power), "normal cleaning needs no confirmation");
+        pump_until("cleaning done", || shown(&app.cleaning_done));
+        assert!(!shown(&app.progress), "dry run: no progress polling");
+        assert_eq!(mask_ti(dump(&dir2, "head-cleaning-00")), mask_ti(hex_golden("head-cleaning-00")));
+        app.cleaning_done.invoke_finish();
+        app.close(&app.dump);
+
+        // Power Cleaning: 360 [Cancel] goes back to 220, then [OK] spools.
+        let dir3 = scratch("power");
+        let app = l800_app(&dir3);
+        app.main.invoke_utility_clicked("head-cleaning".into());
+        pump_until("dialog 220", || shown(&app.cleaning));
+        let power = app.profile.cleaning.iter().position(|c| c.ch == 0x10).expect("L800 power cleaning") as i32;
+        app.cleaning.set_kind(power);
+        app.cleaning.invoke_start();
+        assert!(shown(&app.power), "dialog 360 confirms");
+        app.power.invoke_cancel();
+        assert!(shown(&app.cleaning) && !shown(&app.power));
+        app.cleaning.invoke_start();
+        app.power.invoke_ok();
+        pump_until("cleaning done", || shown(&app.cleaning_done));
+        assert!(std::fs::read_dir(&dir3).unwrap().count() == 1, "one job only");
+        assert_eq!(mask_ti(dump(&dir3, "head-cleaning-10")), mask_ti(hex_golden("head-cleaning-10")));
+        app.cleaning_done.invoke_finish();
+        app.close(&app.dump);
+
+        // Main tab: a change, then [OK]: dry run shows the lpoptions command
+        // and runs nothing.
+        let dir4 = scratch("prefs");
+        let app = l800_app(&dir4);
+        let p = app.main.global::<Prefs>();
+        p.set_grayscale(true);
+        p.set_copies(3);
+        p.set_dirty(true);
+        app.main.invoke_ok();
+        assert!(shown(&app.dump));
+        let cmd = app.dump.get_content().replace(" \\\n    ", " ");
+        assert!(cmd.starts_with("lpoptions -p E2E_NO_SUCH_QUEUE -o "), "{cmd}");
+        assert!(cmd.contains("Color=Grayscale") && cmd.contains("copies=3"), "{cmd}");
+        assert!(app.dump.get_heading().contains("not saved"));
+        assert!(!p.get_dirty());
+        assert!(!dir4.exists(), "dry-run prefs write no file");
+
+        for d in [dir, dir2, dir3] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+}
