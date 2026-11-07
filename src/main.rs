@@ -77,6 +77,12 @@ impl Utility {
         };
         slint::Image::load_from_svg_data(svg).unwrap_or_default()
     }
+    /// Which column of the Windows message tables the utility uses. Paper
+    /// Guide Cleaning uses the Nozzle Check one (FUN_0041a2f8: state 0xF ->
+    /// column 0), so it is not "cleaning" here.
+    fn cleaning(self) -> bool {
+        self == Utility::HeadCleaning
+    }
 }
 
 /// Why a job was not sent.
@@ -106,6 +112,13 @@ fn on(f: fn(&Rc<App>)) -> impl Fn() + 'static {
         if let Some(a) = app() {
             f(&a)
         }
+    }
+}
+
+/// Start a desktop program and reap it on a thread when it exits.
+fn launch(program: &str, arg: &str) {
+    if let Ok(mut child) = std::process::Command::new(program).arg(arg).spawn() {
+        std::thread::spawn(move || child.wait());
     }
 }
 
@@ -200,9 +213,7 @@ impl App {
             return self.show_intro(u);
         };
         self.have_status.set(true);
-        // Paper Guide Cleaning uses the Nozzle Check column of the message
-        // tables (FUN_0041a2f8: state 0xF -> column 0), so it is not "cleaning" here.
-        let cleaning = u == Utility::HeadCleaning;
+        let cleaning = u.cleaning();
         match status::precheck(&s, cleaning) {
             Precheck::Proceed => self.show_intro(u),
             // Dialog 270: strings 1127 + 1133.
@@ -346,6 +357,8 @@ impl App {
         self.progress.set_body("Please wait...".into());
         self.progress.set_bar_visible(false);
         self.progress.set_value(0.0);
+        self.progress.set_frame(0);
+        self.progress.set_animate(true);
         let _ = self.progress.show();
         self.poll_timer.start(TimerMode::Repeated, status::POLL, on(|a| a.poll_cleaning()));
     }
@@ -383,6 +396,7 @@ impl App {
                 Timer::single_shot(
                     Duration::from_millis(500),
                     on(|a| {
+                        a.progress.set_animate(false);
                         let _ = a.progress.hide();
                         a.show_done(true);
                     }),
@@ -391,6 +405,7 @@ impl App {
             Step::GaveUp => {
                 self.poll_timer.stop();
                 self.bar_timer.stop();
+                self.progress.set_animate(false);
                 let _ = self.progress.hide();
                 self.show_done(false);
             }
@@ -407,14 +422,10 @@ impl App {
     fn show_fail(&self, u: Utility, f: Fail) {
         match f {
             Fail::Problem => self.show_message(u, COMM_ERROR, SEE_DETAILS, true),
-            // Headings: E_IHSRG5P 1128 / 1129 (Paper Guide Cleaning uses the
-            // Nozzle Check column).
+            // Headings: E_IHSRG5P 1128 / 1129.
             Fail::Plain(detail) => self.show_message(
                 u,
-                match u {
-                    Utility::HeadCleaning => "Head Cleaning can not be completed.",
-                    _ => "Nozzle Check can not be completed.",
-                },
+                if u.cleaning() { "Head Cleaning can not be completed." } else { "Nozzle Check can not be completed." },
                 &detail,
                 false,
             ),
@@ -623,11 +634,7 @@ fn wire(ui: &App) {
     });
     // Windows runs Epson's own updater (E_GUPA30.EXE); on Linux we open
     // Epson's driver download page for the L800 instead.
-    ui.main.on_driver_update(|| {
-        if let Ok(mut child) = std::process::Command::new("xdg-open").arg(DRIVER_PAGE).spawn() {
-            std::thread::spawn(move || child.wait());
-        }
-    });
+    ui.main.on_driver_update(|| launch("xdg-open", DRIVER_PAGE));
     ui.main.on_close_window(|| {
         let _ = slint::quit_event_loop();
     });
@@ -690,11 +697,7 @@ fn wire(ui: &App) {
         a.open_monitor();
     }));
     // "Print Queue": the GNOME printer settings show the CUPS queue.
-    ui.monitor.on_print_queue(|| {
-        if let Ok(mut child) = std::process::Command::new("gnome-control-center").arg("printers").spawn() {
-            std::thread::spawn(move || child.wait());
-        }
-    });
+    ui.monitor.on_print_queue(|| launch("gnome-control-center", "printers"));
     ui.monitor.on_ok(on(|a| {
         a.monitor_timer.stop();
         let _ = a.monitor.hide();

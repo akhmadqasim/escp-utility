@@ -532,15 +532,14 @@ export component MessageDialog inherits UtilityWindow {
 // magenta, yellow (rest on one side, mid-sweep, other side), alternating the
 // sweep direction so each group starts where the last one ended.
 component CleaningAnimation inherits Rectangle {
-    in-out property <int> frame: 0;
+    in property <int> frame;
     property <int> group: Math.floor(root.frame / 3);
     property <int> step: Math.mod(root.frame, 3);
     property <bool> right-first: Math.mod(root.group, 2) == 0;
-    property <color> ink: root.group == 0 ? #202020 : root.group == 1 ? #00a0e0 : root.group == 2 ? #d0168c : #f0c800;
-    property <angle> start: root.right-first ? 45deg : 135deg;
-    property <angle> arm: root.start + (root.right-first ? 45deg : -45deg) * root.step;
+    property <color> ink: [#202020, #00a0e0, #d0168c, #f0c800][root.group];
+    property <angle> arm: root.right-first ? 45deg * (1 + root.step) : 45deg * (3 - root.step);
     // Still dirty: everything before the sweep, the far half mid-sweep, nothing after.
-    property <length> dirty-x: root.step == 1 && root.right-first ? 0 : root.step == 1 ? 53px : 0;
+    property <length> dirty-x: root.step == 1 && !root.right-first ? 53px : 0;
     property <length> dirty-w: root.step == 0 ? 106px : root.step == 1 ? 53px : 0;
     property <string> fan: "M 53 63 L 10.6 20.6 A 60 60 0 0 1 95.4 20.6 Z";
     width: 106px;
@@ -572,19 +571,20 @@ export component ProgressDialog inherits UtilityWindow {
     in property <string> body;
     in property <bool> bar-visible;
     in property <float> value;
-    in property <bool> animate: true;
-    in-out property <int> frame <=> anim.frame;
+    in property <bool> animate;
+    in-out property <int> frame;
     title: "Head Cleaning";
     width: 420px;
     height: 335px;
     DlgIcon { x: 6px; y: 146px; source: @image-url("icons/head-cleaning.svg"); }
     // 517 (129,11,162x130 px): 12 frames, 106x64, centred at (157,44).
-    anim := CleaningAnimation { x: 157px; y: 44px; }
-    // Timer id 4: next frame every 500 ms while the dialog is open (FUN_00412da4).
+    CleaningAnimation { x: 157px; y: 44px; frame: root.frame; }
+    // Timer id 4: next frame every 500 ms while the dialog is open (FUN_00412da4;
+    // main.rs sets animate while 223 is shown).
     Timer {
         interval: 500ms;
         running: root.animate;
-        triggered => { anim.frame = Math.mod(anim.frame + 1, 12); }
+        triggered => { root.frame = Math.mod(root.frame + 1, 12); }
     }
     if root.bar-visible: Rectangle {
         x: 44px;

@@ -159,21 +159,25 @@ pub fn ink_name(color: u8) -> &'static str {
 /// rest. Titles are the Windows strings; the texts are our own wording.
 pub fn message(s: &Status) -> (&'static str, String) {
     let t = |a: &'static str, b: &str| (a, b.to_string());
-    match (s.st, s.er) {
-        (Some(0x00), None) => return t("Communication error", COMM),
-        (Some(0x00), Some(0x00)) => return t("General error", RESTART),
-        (Some(0x00), Some(0x01)) => return t("Printer busy", "Please wait."),
-        (Some(0x00), Some(0x04)) => return t("Paper jam or CD/DVD tray jam", "For paper, switch the printer off and pull the jammed sheet out by hand. For a CD/DVD, take the tray out. Then press the Paper button on the printer."),
-        (Some(0x00), Some(0x05)) => return t("Check Ink Levels", &format!("{}Check how much ink is left in the printer's ink tanks. {INK_NOTE}", low_inks(s))),
-        (Some(0x00), Some(0x06)) => return t("Paper out or not loaded correctly", "Load the paper again and set the front tray to the lower (paper) position. Then press the Paper button on the printer."),
-        (Some(0x00), Some(0x10)) => return t("Service required", "The printer's ink pads have reached the end of their service life. Contact Epson support."),
-        (Some(0x00), Some(0x12)) => return t("Page not printed or multi-page error", "A page was not printed, several sheets were fed at once, or the wrong paper size was fed. Take the paper out, load it again, and press the Paper button if needed."),
-        (Some(0x00), Some(0x29)) => return t("CD/DVD tray not set correctly", "Load the tray again, then press the Paper button on the printer."),
-        (Some(0x00), Some(0x37)) => return t("Printer cover open", "Close the printer cover."),
-        (Some(0x00), Some(0x38)) => return t("Front tray position error", "For paper, set the front tray to the lower (paper) position. For a CD/DVD, set it to the upper (CD/DVD) position."),
-        (Some(0x00), Some(_)) => return t("Unknown error", RESTART),
-        (Some(0x08), _) => return t("Initial setup error", "The printer's initial setup has not finished. Complete it on the printer."),
-        (Some(0x0A), _) => return t("Printer is shutting down", "Please wait."),
+    match s.st {
+        Some(0x00) => {
+            return match s.er {
+                None => t("Communication error", COMM),
+                Some(0x00) => t("General error", RESTART),
+                Some(0x01) => t("Printer busy", "Please wait."),
+                Some(0x04) => t("Paper jam or CD/DVD tray jam", "For paper, switch the printer off and pull the jammed sheet out by hand. For a CD/DVD, take the tray out. Then press the Paper button on the printer."),
+                Some(0x05) => t("Check Ink Levels", &format!("{}Check how much ink is left in the printer's ink tanks. {INK_NOTE}", low_inks(s))),
+                Some(0x06) => t("Paper out or not loaded correctly", "Load the paper again and set the front tray to the lower (paper) position. Then press the Paper button on the printer."),
+                Some(0x10) => t("Service required", "The printer's ink pads have reached the end of their service life. Contact Epson support."),
+                Some(0x12) => t("Page not printed or multi-page error", "A page was not printed, several sheets were fed at once, or the wrong paper size was fed. Take the paper out, load it again, and press the Paper button if needed."),
+                Some(0x29) => t("CD/DVD tray not set correctly", "Load the tray again, then press the Paper button on the printer."),
+                Some(0x37) => t("Printer cover open", "Close the printer cover."),
+                Some(0x38) => t("Front tray position error", "For paper, set the front tray to the lower (paper) position. For a CD/DVD, set it to the upper (CD/DVD) position."),
+                Some(_) => t("Unknown error", RESTART),
+            };
+        }
+        Some(0x08) => return t("Initial setup error", "The printer's initial setup has not finished. Complete it on the printer."),
+        Some(0x0A) => return t("Printer is shutting down", "Please wait."),
         _ => {}
     }
     match top_warning(&s.warnings) {
