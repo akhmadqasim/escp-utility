@@ -11,7 +11,7 @@
 //! (`CD<2F>DVD`) are decoded. A selection holds one choice per option, as
 //! `lpoptions -o key=value` stores it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -276,29 +276,86 @@ impl Ppd {
 
     /// A complete, conflict-free selection: one value per PPD option (keys
     /// the PPD lacks are dropped). Options are settled one by one, `edited`
-    /// (the one the user just changed) first, then the rest in PPD order. An
-    /// option keeps its value from `sel` unless that is no choice or conflicts
-    /// with an option settled before it; then it falls back to its default,
-    /// else to its first allowed choice. Same input, same output.
+    /// (the one the user just changed; it keeps a valid value) first, then
+    /// the rest in PPD order. Each takes the first of its value from `sel`,
+    /// its default, then its other choices, that conflicts with no option
+    /// settled before it and still lets the later ones settle: when a later
+    /// option has no fitting choice left, the options that ruled its choices
+    /// out are settled again, so an A-B-C constraint chain ends conflict
+    /// free. When no conflict-free selection exists, each option takes its
+    /// first candidate that fits the ones before it (else its first one) and
+    /// the conflict stays. Same input, same output.
     pub fn resolve(&self, sel: &Selection, edited: Option<&str>) -> Selection {
         let is_edited = |o: &&PpdOption| Some(o.keyword.as_str()) == edited;
-        let order = self.options.iter().filter(is_edited).chain(self.options.iter().filter(|o| !is_edited(o)));
-        let mut out = Selection::new();
-        for o in order {
-            let valid = |c: &&str| o.choice(c).is_some();
-            let wanted = sel.get(&o.keyword).map(String::as_str).filter(valid);
-            let default = o.default.as_deref().filter(valid);
-            let fits = |c: &&str| {
-                !self.constraints.iter().any(|k| k.partner(&o.keyword, c).is_some_and(|(p, pc)| out.get(p).is_some_and(|v| v == pc)))
-            };
-            let all = o.choices.iter().map(|c| c.keyword.as_str());
-            let pick = wanted.into_iter().chain(default).chain(all).find(fits);
-            // Nothing fits (unsatisfiable PPD): keep the value, the conflict stays.
-            if let Some(c) = pick.or(wanted).or(default).or(o.choices.first().map(|c| c.keyword.as_str())) {
-                out.insert(o.keyword.clone(), c.to_string());
+        let order: Vec<&PpdOption> =
+            self.options.iter().filter(is_edited).chain(self.options.iter().filter(|o| !is_edited(o))).filter(|o| !o.choices.is_empty()).collect();
+        let candidates: Vec<Vec<&str>> = order
+            .iter()
+            .map(|o| {
+                let valid = |c: &&str| o.choice(c).is_some();
+                let wanted = sel.get(&o.keyword).map(String::as_str).filter(valid);
+                if is_edited(o) && wanted.is_some() {
+                    return wanted.into_iter().collect();
+                }
+                let mut v: Vec<&str> = Vec::new();
+                for c in wanted.into_iter().chain(o.default.as_deref().filter(valid)).chain(o.choices.iter().map(|c| c.keyword.as_str())) {
+                    if !v.contains(&c) {
+                        v.push(c);
+                    }
+                }
+                v
+            })
+            .collect();
+        let index: HashMap<&str, usize> = order.iter().enumerate().map(|(i, o)| (o.keyword.as_str(), i)).collect();
+        let mut picks = Vec::with_capacity(order.len());
+        if self.settle(&order, &index, &candidates, &mut picks).is_err() {
+            for (o, c) in order.iter().zip(&candidates) {
+                let fits = |k: &&str| self.culprit(&index, &picks, &o.keyword, k).is_none();
+                picks.push(c.iter().copied().find(fits).unwrap_or(c[0]));
             }
         }
-        out
+        order.iter().zip(picks).map(|(o, c)| (o.keyword.clone(), c.to_string())).collect()
+    }
+
+    /// The first of the options settled so far (`picks`, positions from
+    /// `index`) whose value conflicts with `option=choice`.
+    fn culprit(&self, index: &HashMap<&str, usize>, picks: &[&str], option: &str, choice: &str) -> Option<usize> {
+        self.constraints
+            .iter()
+            .filter_map(|k| k.partner(option, choice))
+            .filter_map(|(p, pc)| index.get(p).copied().filter(|&j| j < picks.len() && picks[j] == pc))
+            .min()
+    }
+
+    /// Depth-first search for `resolve` with conflict-directed backjumping:
+    /// extends `picks` (the choices of `order[..picks.len()]`) to all of
+    /// `order`, or returns the settled options to blame for the dead end. A
+    /// dead end the current option is not to blame for goes straight back
+    /// past it, so options unrelated to a conflict are never retried.
+    fn settle<'a>(
+        &self,
+        order: &[&PpdOption],
+        index: &HashMap<&str, usize>,
+        candidates: &[Vec<&'a str>],
+        picks: &mut Vec<&'a str>,
+    ) -> Result<(), BTreeSet<usize>> {
+        let i = picks.len();
+        let Some(o) = order.get(i) else { return Ok(()) };
+        let mut blame = BTreeSet::new();
+        for &c in &candidates[i] {
+            if let Some(j) = self.culprit(index, picks, &o.keyword, c) {
+                blame.insert(j);
+                continue;
+            }
+            picks.push(c);
+            let Err(b) = self.settle(order, index, candidates, picks) else { return Ok(()) };
+            picks.truncate(i);
+            if !b.contains(&i) {
+                return Err(b);
+            }
+            blame.extend(b.into_iter().filter(|&j| j != i));
+        }
+        Err(blame)
     }
 }
 
@@ -726,12 +783,34 @@ setpagedevice"
         assert_eq!(out["B"], "b2");
         assert_eq!(out["C"], "c2");
         assert!(p.conflicts(&out).is_empty());
-        // Editing C to c1: the edit holds, A keeps a1 (settled before B), and B
-        // has no fitting choice, so a conflict stays although a2/b1/c1 exists.
-        // Greedy, no backtracking: documents current behaviour.
+        // Editing C to c1: the edit holds. B has no choice beside A a1 and
+        // C c1, so A goes back to a2 and B takes b1; Borderless and Margins,
+        // outside the chain, keep their values.
         let edited = p.resolve(&sel(&[("A", "a1"), ("B", "b2"), ("C", "c1")]), Some("C"));
-        assert_eq!((edited["A"].as_str(), edited["B"].as_str(), edited["C"].as_str()), ("a1", "b2", "c1"));
-        assert_eq!(p.conflicts(&edited).len(), 1);
+        assert_eq!((edited["A"].as_str(), edited["B"].as_str(), edited["C"].as_str()), ("a2", "b1", "c1"));
+        assert_eq!((edited["Borderless"].as_str(), edited["Margins"].as_str()), ("False", "Wide"));
+        assert!(p.conflicts(&edited).is_empty());
+        assert_eq!(p.resolve(&edited, None), edited);
+    }
+
+    /// A dead end goes back only to the options that ruled choices out, never
+    /// through the free ones in between (10^10 combinations here).
+    #[test]
+    fn resolve_skips_free_options_on_a_dead_end() {
+        let mut text = String::from("*PPD-Adobe: \"4.3\"\n*UIConstraints: *X x1 *Y y1\n*OpenUI *X: PickOne\n*X x1: \"\"\n*CloseUI: *X\n");
+        for n in 0..10 {
+            text += &format!("*OpenUI *F{n}: PickOne\n");
+            for c in 0..10 {
+                text += &format!("*F{n} c{c}: \"\"\n");
+            }
+            text += &format!("*CloseUI: *F{n}\n");
+        }
+        text += "*OpenUI *Y: PickOne\n*Y y1: \"\"\n*CloseUI: *Y\n";
+        let p = parse(&text).unwrap();
+        // Unsatisfiable: X and Y keep their only choices, the conflict stays.
+        let out = p.resolve(&Selection::new(), None);
+        assert_eq!((out["X"].as_str(), out["F9"].as_str(), out["Y"].as_str()), ("x1", "c0", "y1"));
+        assert_eq!(p.conflicts(&out).len(), 1);
     }
 
     #[test]
