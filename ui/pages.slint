@@ -121,10 +121,11 @@ component QualityIcon inherits Rectangle {
 // Ink box (1977 / 5253): six boxes re-laid-out at run time to 27 px wide,
 // 8 px apart (x = group + 8 + 35n), C, M, LM, LC, K, Y (SETTINGS-visibility.md).
 component InkBox inherits Group {
+    in property <length> meter-x: 8px;
     in property <length> meter-y;
     title: "Approximate Ink Levels";
     for ink[i] in Prefs.inks: InkMeter {
-        x: 8px + i * 35px;
+        x: root.meter-x + i * 35px;
         y: root.meter-y;
         width: 27px;
         height: 54px;
@@ -135,7 +136,7 @@ component InkBox inherits Group {
 // "Show Settings" / "Hide Settings" (strings 2050/2051): toggles the Current
 // Settings window (dialog 4050).
 component ShowSettingsButton inherits DlgButton {
-    x: 354px;
+    x: 355px;
     y: 403px;
     width: 80px;
     height: 23px;
@@ -143,149 +144,169 @@ component ShowSettingsButton inherits DlgButton {
     clicked => { Prefs.toggle-settings(); }
 }
 
-// Dialog 904 "Shortcuts".
+// Tidy layout (README "Printing Preferences"): the Windows controls, labels, sizes and
+// grouping, on one grid: 8 px page margin, 6 px between group boxes,
+// content 8 px below a group title and 8 px in from its frame, rows 22 px
+// apart (check boxes, radios) or 26 px (combo boxes), side-by-side groups
+// of equal height, and the bottom row (23 px buttons) at y 403, 8 px above
+// the page bottom, with the "Show this screen first" row above it at 384.
+// Hidden L800 controls leave no holes.
+
+// Dialog 904 "Shortcuts". Columns: presets 8..209, ink 215..435.
 export component ShortcutsPage inherits Rectangle {
     width: 443px;
     height: 434px;
     background: #ffffff;
-    DlgText { x: 9px; y: 8px; width: 93px; height: 13px; text: "Printing Presets"; wrap: no-wrap; }
-    // 5251 LISTBOX (8,24,201x302): presets from E_FUIXG5P.XML.
+    DlgText { x: 8px; y: 8px; width: 93px; height: 13px; text: "Printing Presets"; wrap: no-wrap; }
+    // 5251 LISTBOX: presets from E_FUIXG5P.XML.
     List {
-        x: 8px; y: 24px; width: 201px; height: 302px;
+        x: 8px; y: 25px; width: 201px; height: 302px;
         model: Prefs.preset-labels;
         current-index: Prefs.preset;
         selected => { Prefs.preset-picked(self.current-index); }
     }
-    DlgButton { x: 131px; y: 325px; width: 80px; height: 23px; text: "Reset"; enabled: false; tip: Strings.windows-only; }
-    CheckBox { x: 14px; y: 364px; width: 204px; height: 29px; text: "Do not display mouse-over messages for Printing Presets."; multiline: true; enabled: false; tip: Strings.windows-only; }
-    DlgButton { x: 20px; y: 403px; width: 105px; height: 23px; text: "Add/Remove..."; enabled: false; tip: Strings.windows-only; }
-    // 5253 (215,237,222x112); How to Buy (5262) hidden, as on Main.
-    InkBox { x: 215px; y: 237px; width: 222px; height: 112px; meter-y: 20px; }
-    CheckBox { x: 300px; y: 364px; width: 92px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
-    CheckBox { x: 300px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
-    DlgButton { x: 131px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
+    DlgButton { x: 129px; y: 333px; width: 80px; height: 23px; text: "Reset"; enabled: false; tip: Strings.windows-only; }
+    CheckBox { x: 8px; y: 362px; width: 201px; height: 29px; text: "Do not display mouse-over messages for Printing Presets."; multiline: true; enabled: false; tip: Strings.windows-only; }
+    // 5253, bottom-aligned with the list; How to Buy (5262) hidden, as on Main.
+    InkBox { x: 215px; y: 244px; width: 220px; height: 83px; meter-x: 9px; meter-y: 21px; }
+    CheckBox { x: 307px; y: 362px; width: 92px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
+    CheckBox { x: 307px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
+    DlgButton { x: 8px; y: 403px; width: 105px; height: 23px; text: "Add/Remove..."; enabled: false; tip: Strings.windows-only; }
+    DlgButton { x: 119px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
     ShowSettingsButton { }
 }
 
-// Dialog 900 "Main".
+// Dialog 900 "Main". Rows: Quality 8..108; Paper | Print Options 114..247;
+// Ink Levels | Orientation 253..355. Columns 8..263 and 269..435.
 export component MainPage inherits Rectangle {
     width: 443px;
     height: 434px;
     background: #ffffff;
-    Group { x: 14px; y: 8px; width: 420px; height: 104px; title: "Quality Option"; }
-    QualityIcon { x: 32px; y: 26px; level: 0; source: @image-url("icons/quality-draft.svg"); }
-    QualityIcon { x: 113px; y: 26px; level: 1; source: @image-url("icons/quality-text.svg"); }
-    QualityIcon { x: 194px; y: 26px; level: 2; source: @image-url("icons/quality-textimage.svg"); }
-    QualityIcon { x: 275px; y: 26px; level: 3; source: @image-url("icons/quality-photo.svg"); }
-    QualityIcon { x: 356px; y: 26px; level: 4; source: @image-url("icons/quality-bestphoto.svg"); }
-    for q[i] in [{x: 29px, w: 45px}, {x: 111px, w: 42px}, {x: 174px, w: 90px}, {x: 273px, w: 48px}, {x: 342px, w: 86px}]: Radio {
-        x: q.x; y: 86px; width: q.w; height: 13px;
-        text: Prefs.quality-labels[i];
-        checked: Prefs.quality == i;
-        picked => {
-            Prefs.quality = i;
-            Prefs.changed();
+    Group { x: 8px; y: 8px; width: 427px; height: 100px; title: "Quality Option"; }
+    // Five equal columns; each picture and radio is centred in its column.
+    for q[i] in [
+        { c: 51px, w: 45px, icon: @image-url("icons/quality-draft.svg") },
+        { c: 136px, w: 42px, icon: @image-url("icons/quality-text.svg") },
+        { c: 222px, w: 90px, icon: @image-url("icons/quality-textimage.svg") },
+        { c: 307px, w: 48px, icon: @image-url("icons/quality-photo.svg") },
+        { c: 392px, w: 86px, icon: @image-url("icons/quality-bestphoto.svg") },
+    ]: Rectangle {
+        QualityIcon { x: q.c - 21px; y: 29px; level: i; source: q.icon; }
+        Radio {
+            x: q.c - q.w / 2; y: 87px; width: q.w; height: 13px;
+            text: Prefs.quality-labels[i];
+            checked: Prefs.quality == i;
+            picked => {
+                Prefs.quality = i;
+                Prefs.changed();
+            }
         }
     }
 
-    Group { x: 14px; y: 119px; width: 255px; height: 153px; title: "Paper Options"; }
-    DlgText { x: 23px; y: 146px; width: 38px; height: 13px; text: "Source"; wrap: no-wrap; }
-    Combo { x: 65px; y: 141px; width: 197px; model: Prefs.source-labels; current-index <=> Prefs.source; selected => { Prefs.changed(); } }
-    DlgText { x: 32px; y: 171px; width: 26px; height: 13px; text: "Type"; wrap: no-wrap; }
-    Combo { x: 65px; y: 167px; width: 197px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; selected => { Prefs.pick("media", self.current-index); } }
-    DlgText { x: 35px; y: 200px; width: 26px; height: 13px; text: "Size"; wrap: no-wrap; }
-    Combo { x: 65px; y: 197px; width: 197px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; selected => { Prefs.pick("size", self.current-index); } }
+    Group { x: 8px; y: 114px; width: 255px; height: 133px; title: "Paper Options"; }
+    DlgText { x: 16px; y: 139px; width: 38px; height: 13px; text: "Source"; wrap: no-wrap; horizontal-alignment: right; }
+    Combo { x: 60px; y: 135px; width: 195px; model: Prefs.source-labels; current-index <=> Prefs.source; selected => { Prefs.changed(); } }
+    DlgText { x: 16px; y: 165px; width: 38px; height: 13px; text: "Type"; wrap: no-wrap; horizontal-alignment: right; }
+    Combo { x: 60px; y: 161px; width: 195px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; selected => { Prefs.pick("media", self.current-index); } }
+    DlgText { x: 16px; y: 191px; width: 38px; height: 13px; text: "Size"; wrap: no-wrap; horizontal-alignment: right; }
+    Combo { x: 60px; y: 187px; width: 195px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; selected => { Prefs.pick("size", self.current-index); } }
+    // On the same row as Quiet Mode, so both groups end together.
     Radio {
-        x: 71px; y: 228px; width: 60px; height: 13px; text: "Borders";
+        x: 60px; y: 226px; width: 60px; height: 13px; text: "Borders";
         checked: !Prefs.borderless || !Prefs.borderless-allowed;
         picked => { Prefs.borderless = false; Prefs.changed(); }
     }
     Radio {
-        x: 140px; y: 228px; width: 86px; height: 13px; text: "Borderless";
+        x: 140px; y: 226px; width: 86px; height: 13px; text: "Borderless";
         enabled: Prefs.borderless-allowed;
         tip: Prefs.borderless-allowed ? "" : Strings.borderless-off;
         checked: Prefs.borderless && Prefs.borderless-allowed;
         picked => { Prefs.borderless = true; Prefs.changed(); }
     }
 
-    Group { x: 278px; y: 119px; width: 156px; height: 153px; title: "Print Options"; }
-    CheckBox { x: 294px; y: 140px; width: 92px; height: 13px; text: "PhotoEnhance"; enabled: false; tip: Strings.no-linux; }
-    CheckBox { x: 294px; y: 159px; width: 92px; height: 13px; text: "Fix Red-Eye"; enabled: false; tip: Strings.no-linux; }
-    CheckBox { x: 294px; y: 179px; width: 92px; height: 13px; text: "Reverse Order"; checked <=> Prefs.reverse; toggled => { Prefs.changed(); } }
-    CheckBox { x: 294px; y: 198px; width: 92px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
-    EtchedLine { x: 288px; y: 239px; width: 137px; }
+    Group { x: 269px; y: 114px; width: 166px; height: 133px; title: "Print Options"; }
+    CheckBox { x: 277px; y: 135px; width: 92px; height: 13px; text: "PhotoEnhance"; enabled: false; tip: Strings.no-linux; }
+    CheckBox { x: 277px; y: 157px; width: 92px; height: 13px; text: "Fix Red-Eye"; enabled: false; tip: Strings.no-linux; }
+    CheckBox { x: 277px; y: 179px; width: 92px; height: 13px; text: "Reverse Order"; checked <=> Prefs.reverse; toggled => { Prefs.changed(); } }
+    CheckBox { x: 277px; y: 201px; width: 92px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
+    EtchedLine { x: 277px; y: 219px; width: 150px; }
     // 1997: the L800 capability bits show it (SETTINGS.md §4); the PPD has no quiet mode.
-    CheckBox { x: 294px; y: 245px; width: 105px; height: 13px; text: "Quiet Mode"; enabled: false; tip: Strings.quiet-off; }
+    CheckBox { x: 277px; y: 226px; width: 105px; height: 13px; text: "Quiet Mode"; enabled: false; tip: Strings.quiet-off; }
 
-    // 1977 (14,275,222x98), retitled to string 2082 at run time.
-    InkBox { x: 14px; y: 275px; width: 222px; height: 98px; meter-y: 21px; }
+    // 1977, retitled to string 2082 at run time; meters centred.
+    InkBox { x: 8px; y: 253px; width: 255px; height: 102px; meter-x: 26px; meter-y: 31px; }
 
-    Group { x: 245px; y: 275px; width: 189px; height: 98px; title: "Orientation"; }
-    Radio { x: 255px; y: 306px; width: 75px; height: 13px; text: "Portrait"; checked: !Prefs.landscape; picked => { Prefs.landscape = false; Prefs.changed(); } }
-    Radio { x: 255px; y: 332px; width: 78px; height: 13px; text: "Landscape"; checked: Prefs.landscape; picked => { Prefs.landscape = true; Prefs.changed(); } }
-    Image { x: 354px; y: 291px; width: 68px; height: 73px; source: Prefs.landscape ? @image-url("icons/orient-landscape.svg") : @image-url("icons/orient-portrait.svg"); }
+    Group { x: 269px; y: 253px; width: 166px; height: 102px; title: "Orientation"; }
+    Radio { x: 277px; y: 285px; width: 75px; height: 13px; text: "Portrait"; checked: !Prefs.landscape; picked => { Prefs.landscape = false; Prefs.changed(); } }
+    Radio { x: 277px; y: 307px; width: 78px; height: 13px; text: "Landscape"; checked: Prefs.landscape; picked => { Prefs.landscape = true; Prefs.changed(); } }
+    Image { x: 359px; y: 274px; width: 68px; height: 73px; source: Prefs.landscape ? @image-url("icons/orient-landscape.svg") : @image-url("icons/orient-portrait.svg"); }
 
-    CheckBox { x: 300px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
-    DlgButton { x: 14px; y: 403px; width: 110px; height: 23px; text: "Reset Defaults"; clicked => { Prefs.reset-defaults(); } }
-    DlgButton { x: 131px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
+    CheckBox { x: 307px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
+    DlgButton { x: 8px; y: 403px; width: 110px; height: 23px; text: "Reset Defaults"; clicked => { Prefs.reset-defaults(); } }
+    DlgButton { x: 124px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
     ShowSettingsButton { }
 }
 
 // Dialog 901 "Advanced". The four combos of "Paper & Quality Options" are
 // read in template order as Source, Type, Quality, Size (M).
+// Left column 8..218: Paper & Quality 8..155, Orientation 161..203, Print
+// Options 209..368, then the custom settings row 374..397. Right column 224..435: Color Management 8..203, level
+// with Orientation (the L800 hides the PhotoEnhance/ICM panels below it).
 export component AdvancedPage inherits Rectangle {
     width: 443px;
     height: 434px;
     background: #ffffff;
-    Group { x: 8px; y: 7px; width: 210px; height: 150px; title: "Paper & Quality Options"; }
-    Combo { x: 15px; y: 26px; width: 195px; model: Prefs.source-labels; current-index <=> Prefs.source; selected => { Prefs.changed(); } }
-    Combo { x: 15px; y: 52px; width: 195px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; selected => { Prefs.pick("media", self.current-index); } }
+    Group { x: 8px; y: 8px; width: 210px; height: 147px; title: "Paper & Quality Options"; }
+    Combo { x: 16px; y: 29px; width: 194px; model: Prefs.source-labels; current-index <=> Prefs.source; selected => { Prefs.changed(); } }
+    Combo { x: 16px; y: 55px; width: 194px; model: Prefs.media-labels; current-index <=> Prefs.media-pos; selected => { Prefs.pick("media", self.current-index); } }
     // 3105 Print Quality: the print modes of this paper type (strings 1400-1430).
-    Combo { x: 15px; y: 78px; width: 195px; model: Prefs.adv-quality-labels; current-index <=> Prefs.adv-quality-pos; selected => { Prefs.pick("quality", self.current-index); } }
-    Combo { x: 15px; y: 104px; width: 195px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; selected => { Prefs.pick("size", self.current-index); } }
+    Combo { x: 16px; y: 81px; width: 194px; model: Prefs.adv-quality-labels; current-index <=> Prefs.adv-quality-pos; selected => { Prefs.pick("quality", self.current-index); } }
+    Combo { x: 16px; y: 107px; width: 194px; model: Prefs.size-labels; current-index <=> Prefs.size-pos; selected => { Prefs.pick("size", self.current-index); } }
     Radio {
-        x: 17px; y: 132px; width: 68px; height: 13px; text: "Borders";
+        x: 16px; y: 134px; width: 68px; height: 13px; text: "Borders";
         checked: !Prefs.borderless || !Prefs.borderless-allowed;
         picked => { Prefs.borderless = false; Prefs.changed(); }
     }
     Radio {
-        x: 102px; y: 132px; width: 83px; height: 13px; text: "Borderless";
+        x: 104px; y: 134px; width: 83px; height: 13px; text: "Borderless";
         enabled: Prefs.borderless-allowed;
         tip: Prefs.borderless-allowed ? "" : Strings.borderless-off;
         checked: Prefs.borderless && Prefs.borderless-allowed;
         picked => { Prefs.borderless = true; Prefs.changed(); }
     }
 
-    Group { x: 8px; y: 159px; width: 210px; height: 46px; title: "Orientation"; }
-    Radio { x: 17px; y: 180px; width: 68px; height: 13px; text: "Portrait"; checked: !Prefs.landscape; picked => { Prefs.landscape = false; Prefs.changed(); } }
-    Radio { x: 102px; y: 180px; width: 75px; height: 13px; text: "Landscape"; checked: Prefs.landscape; picked => { Prefs.landscape = true; Prefs.changed(); } }
+    Group { x: 8px; y: 161px; width: 210px; height: 42px; title: "Orientation"; }
+    Radio { x: 16px; y: 182px; width: 68px; height: 13px; text: "Portrait"; checked: !Prefs.landscape; picked => { Prefs.landscape = false; Prefs.changed(); } }
+    Radio { x: 104px; y: 182px; width: 75px; height: 13px; text: "Landscape"; checked: Prefs.landscape; picked => { Prefs.landscape = true; Prefs.changed(); } }
 
-    Group { x: 8px; y: 208px; width: 210px; height: 158px; title: "Print Options"; }
-    CheckBox { x: 17px; y: 228px; width: 105px; height: 13px; text: "Fix Red-Eye"; enabled: false; tip: Strings.no-linux; }
-    CheckBox { x: 17px; y: 249px; width: 105px; height: 13px; text: "High Speed"; enabled: false; tip: "No Linux option: the L800 filter chooses the print direction for each quality."; }
-    CheckBox { x: 17px; y: 270px; width: 105px; height: 13px; text: "Edge Smoothing"; enabled: false; tip: Strings.no-linux; }
-    CheckBox { x: 17px; y: 291px; width: 105px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
+    Group { x: 8px; y: 209px; width: 210px; height: 159px; title: "Print Options"; }
+    CheckBox { x: 16px; y: 230px; width: 105px; height: 13px; text: "Fix Red-Eye"; enabled: false; tip: Strings.no-linux; }
+    CheckBox { x: 16px; y: 252px; width: 105px; height: 13px; text: "High Speed"; enabled: false; tip: "No Linux option: the L800 filter chooses the print direction for each quality."; }
+    CheckBox { x: 16px; y: 274px; width: 105px; height: 13px; text: "Edge Smoothing"; enabled: false; tip: Strings.no-linux; }
+    CheckBox { x: 16px; y: 296px; width: 105px; height: 13px; text: "Print Preview"; enabled: false; tip: Strings.windows-only; }
     // 3115 Grayscale: the L800's only colour switch (PPD Color=Grayscale).
-    CheckBox { x: 17px; y: 312px; width: 105px; height: 13px; text: "Grayscale"; checked <=> Prefs.grayscale; toggled => { Prefs.changed(); } }
-    EtchedLine { x: 14px; y: 336px; width: 195px; }
-    CheckBox { x: 17px; y: 346px; width: 105px; height: 13px; text: "Quiet Mode"; enabled: false; tip: Strings.quiet-off; }
-    Combo { x: 9px; y: 374px; width: 119px; model: []; enabled: false; tip: Strings.windows-only; }
-    DlgButton { x: 131px; y: 372px; width: 102px; height: 23px; text: "Save Settings..."; clicked => { Prefs.open-dialog("custom-settings"); } }
+    CheckBox { x: 16px; y: 318px; width: 105px; height: 13px; text: "Grayscale"; checked <=> Prefs.grayscale; toggled => { Prefs.changed(); } }
+    EtchedLine { x: 16px; y: 340px; width: 194px; }
+    CheckBox { x: 16px; y: 347px; width: 105px; height: 13px; text: "Quiet Mode"; enabled: false; tip: Strings.quiet-off; }
 
-    Group { x: 225px; y: 7px; width: 210px; height: 359px; title: "Color Management"; }
-    Radio { x: 234px; y: 26px; width: 90px; height: 13px; text: "Color Controls"; checked: true; }
-    Radio { x: 234px; y: 46px; width: 135px; height: 13px; text: "PhotoEnhance"; enabled: false; tip: Strings.no-linux; }
-    Radio { x: 234px; y: 65px; width: 86px; height: 13px; text: "ICM"; enabled: false; tip: "No driver ICM on Linux: use colour management in the application or colord."; }
-    EtchedLine { x: 233px; y: 86px; width: 195px; }
-    DlgText { x: 234px; y: 99px; width: 57px; height: 13px; text: "Color Mode"; wrap: no-wrap; }
-    Combo { x: 297px; y: 94px; width: 129px; model: Prefs.color-mode-labels; current-index <=> Prefs.color-mode; selected => { Prefs.changed(); } }
-    DlgText { x: 234px; y: 128px; width: 38px; height: 13px; text: "Gamma"; wrap: no-wrap; }
-    Combo { x: 297px; y: 122px; width: 129px; model: Prefs.gamma-labels; current-index <=> Prefs.gamma; enabled: !Prefs.vivid; tip: Prefs.vivid ? Strings.gamma-vivid : ""; selected => { Prefs.changed(); } }
-    DlgButton { x: 345px; y: 151px; width: 81px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("color-controls"); } }
+    Group { x: 224px; y: 8px; width: 211px; height: 195px; title: "Color Management"; }
+    Radio { x: 232px; y: 29px; width: 90px; height: 13px; text: "Color Controls"; checked: true; }
+    Radio { x: 232px; y: 51px; width: 135px; height: 13px; text: "PhotoEnhance"; enabled: false; tip: Strings.no-linux; }
+    Radio { x: 232px; y: 73px; width: 86px; height: 13px; text: "ICM"; enabled: false; tip: "No driver ICM on Linux: use colour management in the application or colord."; }
+    EtchedLine { x: 232px; y: 93px; width: 195px; }
+    DlgText { x: 232px; y: 106px; width: 57px; height: 13px; text: "Color Mode"; wrap: no-wrap; }
+    Combo { x: 297px; y: 102px; width: 130px; model: Prefs.color-mode-labels; current-index <=> Prefs.color-mode; selected => { Prefs.changed(); } }
+    DlgText { x: 232px; y: 132px; width: 57px; height: 13px; text: "Gamma"; wrap: no-wrap; }
+    Combo { x: 297px; y: 128px; width: 130px; model: Prefs.gamma-labels; current-index <=> Prefs.gamma; enabled: !Prefs.vivid; tip: Prefs.vivid ? Strings.gamma-vivid : ""; selected => { Prefs.changed(); } }
+    DlgButton { x: 346px; y: 172px; width: 81px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("color-controls"); } }
 
-    CheckBox { x: 300px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
-    DlgButton { x: 14px; y: 403px; width: 110px; height: 23px; text: "Reset Defaults"; clicked => { Prefs.reset-defaults(); } }
-    DlgButton { x: 131px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
+    CheckBox { x: 307px; y: 384px; width: 128px; height: 13px; text: "Show this screen first"; enabled: false; tip: Strings.windows-only; }
+    DlgButton { x: 8px; y: 403px; width: 110px; height: 23px; text: "Reset Defaults"; clicked => { Prefs.reset-defaults(); } }
+    DlgButton { x: 124px; y: 403px; width: 102px; height: 23px; text: "Technical Support"; enabled: false; tip: Strings.windows-only; }
+    // Custom settings (3123) and Save Settings... (3124), under Print Options
+    // and in the columns of the buttons below them.
+    Combo { x: 8px; y: 375px; width: 110px; model: []; enabled: false; tip: Strings.windows-only; }
+    DlgButton { x: 124px; y: 374px; width: 102px; height: 23px; text: "Save Settings..."; clicked => { Prefs.open-dialog("custom-settings"); } }
 }
 
 // Page Layout preview (owner-draw 3414): one sheet with the pages on it.
@@ -336,90 +357,91 @@ component CollatePicture inherits Rectangle {
     }
 }
 
-// Dialog 902 "Page Layout".
+// Dialog 902 "Page Layout". Left 8..218: Layout 8..282, Watermark 288..380.
+// Right 224..435: 2-sided 8..79, Copies 85..178, Borderless 184..306, More
+// Options 312..380. Both columns end at 380 (this page has no bottom row).
 export component PageLayoutPage inherits Rectangle {
     width: 443px;
     height: 434px;
     background: #ffffff;
-    Group { x: 8px; y: 8px; width: 210px; height: 306px; title: "Layout"; }
+    Group { x: 8px; y: 8px; width: 210px; height: 274px; title: "Layout"; }
     CheckBox {
-        x: 15px; y: 26px; width: 155px; height: 13px; text: "Reduce/Enlarge Document";
+        x: 16px; y: 29px; width: 155px; height: 13px; text: "Reduce/Enlarge Document";
         checked <=> Prefs.reduce;
         enabled: !Prefs.needs-reduce && Prefs.sheet-feed;
         tip: Prefs.needs-reduce ? "This paper size is larger than the printer can print: it must be reduced." : "";
         toggled => { Prefs.changed(); }
     }
     Radio {
-        x: 30px; y: 46px; width: 122px; height: 13px; text: "By Output Paper Size";
+        x: 32px; y: 51px; width: 122px; height: 13px; text: "By Output Paper Size";
         enabled: Prefs.reduce && Prefs.sheet-feed; checked: !Prefs.by-percent;
         picked => { Prefs.by-percent = false; Prefs.changed(); }
     }
-    Combo { x: 15px; y: 63px; width: 195px; model: Prefs.output-labels; current-index <=> Prefs.output-pos; enabled: Prefs.reduce && !Prefs.by-percent && Prefs.sheet-feed; selected => { Prefs.pick("output", self.current-index); } }
+    Combo { x: 32px; y: 70px; width: 178px; model: Prefs.output-labels; current-index <=> Prefs.output-pos; enabled: Prefs.reduce && !Prefs.by-percent && Prefs.sheet-feed; selected => { Prefs.pick("output", self.current-index); } }
     Radio {
-        x: 30px; y: 94px; width: 96px; height: 13px; text: "By Percentage";
+        x: 32px; y: 100px; width: 96px; height: 13px; text: "By Percentage";
         enabled: Prefs.reduce && Prefs.sheet-feed; checked: Prefs.by-percent;
         picked => { Prefs.by-percent = true; Prefs.changed(); }
     }
-    NumberSpin { x: 132px; y: 91px; width: 56px; height: 20px; minimum: 10; maximum: 400; value <=> Prefs.scale; commit: Prefs.commit-tick; enabled: Prefs.reduce && Prefs.by-percent && Prefs.sheet-feed; changed => { Prefs.changed(); } }
-    DlgText { x: 195px; y: 94px; width: 12px; height: 13px; text: "%"; }
+    NumberSpin { x: 134px; y: 97px; width: 56px; height: 20px; minimum: 10; maximum: 400; value <=> Prefs.scale; commit: Prefs.commit-tick; enabled: Prefs.reduce && Prefs.by-percent && Prefs.sheet-feed; changed => { Prefs.changed(); } }
+    DlgText { x: 196px; y: 100px; width: 12px; height: 13px; text: "%"; }
 
-    CheckBox { x: 15px; y: 153px; width: 75px; height: 13px; text: "Multi-Page"; checked <=> Prefs.multi-page; toggled => { Prefs.changed(); } }
+    CheckBox { x: 16px; y: 135px; width: 75px; height: 13px; text: "Multi-Page"; checked <=> Prefs.multi-page; toggled => { Prefs.changed(); } }
     Radio {
-        x: 20px; y: 174px; width: 116px; height: 13px; text: "Pages per Sheet";
+        x: 32px; y: 157px; width: 116px; height: 13px; text: "Pages per Sheet";
         enabled: Prefs.multi-page; checked: !Prefs.poster;
         picked => { Prefs.poster = false; Prefs.changed(); }
     }
     Radio {
-        x: 20px; y: 195px; width: 92px; height: 13px; text: "Poster Printing";
+        x: 32px; y: 179px; width: 92px; height: 13px; text: "Poster Printing";
         enabled: Prefs.multi-page; checked: Prefs.poster;
         picked => { Prefs.poster = true; Prefs.changed(); }
     }
     // 3410: "2" 3521, "4" 3522. 3416: 2x1 3503, 2x2 3500, 3x3 3501, 4x4 3502.
-    if !Prefs.poster: Spin { x: 45px; y: 219px; width: 57px; height: 20px; labels: ["2", "4"]; index <=> Prefs.pages-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
-    if Prefs.poster: Spin { x: 45px; y: 219px; width: 57px; height: 20px; labels: ["2x1", "2x2", "3x3", "4x4"]; index <=> Prefs.poster-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
-    if !Prefs.poster: CheckBox { x: 20px; y: 249px; width: 110px; height: 13px; text: "Print Page Borders"; enabled: Prefs.multi-page; checked <=> Prefs.page-borders; toggled => { Prefs.changed(); } }
+    if !Prefs.poster: Spin { x: 48px; y: 201px; width: 57px; height: 20px; labels: ["2", "4"]; index <=> Prefs.pages-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
+    if Prefs.poster: Spin { x: 48px; y: 201px; width: 57px; height: 20px; labels: ["2x1", "2x2", "3x3", "4x4"]; index <=> Prefs.poster-index; enabled: Prefs.multi-page; changed => { Prefs.changed(); } }
+    if !Prefs.poster: CheckBox { x: 32px; y: 229px; width: 110px; height: 13px; text: "Print Page Borders"; enabled: Prefs.multi-page; checked <=> Prefs.page-borders; toggled => { Prefs.changed(); } }
+    // 3414: our own preview of the sheet layout (hidden while Multi-Page is off).
+    if Prefs.multi-page: LayoutPreview { x: 141px; y: 157px; width: 69px; height: 75px; }
     DlgButton {
-        x: 135px; y: 258px; width: 78px; height: 23px;
+        x: 132px; y: 251px; width: 78px; height: 23px;
         text: Prefs.poster ? "Settings..." : "Page Order...";
         enabled: Prefs.multi-page;
         clicked => { Prefs.open-dialog(Prefs.poster ? "poster" : "page-order"); }
     }
 
-    // 3414 (141,172,69x75): our own preview of the sheet layout.
-    if Prefs.multi-page: LayoutPreview { x: 141px; y: 172px; width: 69px; height: 75px; }
-
-    Group { x: 8px; y: 319px; width: 210px; height: 104px; title: "Watermark"; }
+    Group { x: 8px; y: 288px; width: 210px; height: 92px; title: "Watermark"; }
     // The PPD's watermark data paths (*epcgWatermarkData) point at
     // /home/epson/projects/..., which does not exist, so the filter cannot
     // draw watermarks (SETTINGS.md): shown, but off.
-    Combo { x: 18px; y: 349px; width: 186px; model: ["None", "Confidential", "Draft", "Urgent", "Priority", "Hot", "Do Not Copy", "For Your Eyes Only", "Review Copy", "Top Secret", "Duplicate"]; current-index: 0; enabled: false; tip: "Off: the installed L800 driver points at watermark files that do not exist, so watermarks would not print."; }
-    DlgButton { x: 23px; y: 382px; width: 84px; height: 23px; text: "Add/Del..."; enabled: false; tip: "No Linux option: the L800 driver has only the ten built-in watermarks."; }
-    DlgButton { x: 114px; y: 382px; width: 84px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("watermark"); } }
+    Combo { x: 16px; y: 309px; width: 194px; model: ["None", "Confidential", "Draft", "Urgent", "Priority", "Hot", "Do Not Copy", "For Your Eyes Only", "Review Copy", "Top Secret", "Duplicate"]; current-index: 0; enabled: false; tip: "Off: the installed L800 driver points at watermark files that do not exist, so watermarks would not print."; }
+    DlgButton { x: 16px; y: 342px; width: 84px; height: 23px; text: "Add/Del..."; enabled: false; tip: "No Linux option: the L800 driver has only the ten built-in watermarks."; }
+    DlgButton { x: 106px; y: 342px; width: 84px; height: 23px; text: "Settings..."; clicked => { Prefs.open-dialog("watermark"); } }
 
-    Group { x: 225px; y: 8px; width: 210px; height: 112px; title: "2-sided printing"; }
-    Radio { x: 234px; y: 29px; width: 51px; height: 13px; text: "Off"; checked: true; enabled: false; tip: Strings.no-linux; }
-    Radio { x: 234px; y: 49px; width: 51px; height: 13px; text: "On"; enabled: false; tip: Strings.no-linux; }
-    DlgButton { x: 252px; y: 70px; width: 90px; height: 23px; text: "Margins..."; clicked => { Prefs.open-dialog("margins"); } }
-    CheckBox { x: 330px; y: 99px; width: 95px; height: 13px; text: "Folded Booklet"; enabled: false; tip: Strings.no-linux; }
+    Group { x: 224px; y: 8px; width: 211px; height: 71px; title: "2-sided printing"; }
+    Radio { x: 232px; y: 29px; width: 51px; height: 13px; text: "Off"; checked: true; enabled: false; tip: Strings.no-linux; }
+    Radio { x: 296px; y: 29px; width: 51px; height: 13px; text: "On"; enabled: false; tip: Strings.no-linux; }
+    DlgButton { x: 232px; y: 48px; width: 90px; height: 23px; text: "Margins..."; clicked => { Prefs.open-dialog("margins"); } }
+    CheckBox { x: 330px; y: 53px; width: 95px; height: 13px; text: "Folded Booklet"; enabled: false; tip: Strings.no-linux; }
 
-    Group { x: 225px; y: 124px; width: 210px; height: 96px; title: "Copies"; }
-    DlgText { x: 279px; y: 143px; width: 33px; height: 13px; text: "Copies"; wrap: no-wrap; }
-    NumberSpin { x: 324px; y: 140px; width: 61px; height: 20px; minimum: 1; maximum: 9999; value <=> Prefs.copies; commit: Prefs.commit-tick; changed => { Prefs.changed(); } }
-    CheckBox { x: 234px; y: 167px; width: 89px; height: 13px; text: "Reverse Order"; checked <=> Prefs.reverse; toggled => { Prefs.changed(); } }
-    CheckBox { x: 234px; y: 192px; width: 87px; height: 13px; text: "Collate"; checked <=> Prefs.collate; toggled => { Prefs.changed(); } }
-    // 3431 (341,169,86x42): our own collate picture.
-    CollatePicture { x: 341px; y: 169px; width: 86px; height: 42px; }
+    Group { x: 224px; y: 85px; width: 211px; height: 93px; title: "Copies"; }
+    DlgText { x: 232px; y: 109px; width: 40px; height: 13px; text: "Copies"; wrap: no-wrap; }
+    NumberSpin { x: 276px; y: 106px; width: 61px; height: 20px; minimum: 1; maximum: 9999; value <=> Prefs.copies; commit: Prefs.commit-tick; changed => { Prefs.changed(); } }
+    CheckBox { x: 232px; y: 132px; width: 89px; height: 13px; text: "Reverse Order"; checked <=> Prefs.reverse; toggled => { Prefs.changed(); } }
+    CheckBox { x: 232px; y: 154px; width: 87px; height: 13px; text: "Collate"; checked <=> Prefs.collate; toggled => { Prefs.changed(); } }
+    // 3431: our own collate picture.
+    CollatePicture { x: 341px; y: 128px; width: 86px; height: 42px; }
 
-    Group { x: 225px; y: 223px; width: 210px; height: 135px; title: "Borderless"; }
-    DlgText { x: 240px; y: 244px; width: 131px; height: 13px; text: "Enlargement Method"; wrap: no-wrap; color: #8a8a8a; }
-    Combo { x: 233px; y: 263px; width: 195px; model: ["Auto Expand", "Retain Size"]; current-index: 0; enabled: false; tip: "No Linux option: the L800 PPD has no borderless expansion control."; }
-    DlgText { x: 240px; y: 302px; width: 50px; height: 13px; text: "Expansion"; wrap: no-wrap; color: #8a8a8a; }
-    Slider { x: 296px; y: 296px; width: 132px; height: 36px; minimum: 0; maximum: 2; value: 2; enabled: false; }
-    DlgText { x: 297px; y: 335px; width: 23px; height: 13px; text: "Min"; color: #8a8a8a; }
-    DlgText { x: 350px; y: 335px; width: 23px; height: 13px; text: "Mid"; horizontal-alignment: center; color: #8a8a8a; }
-    DlgText { x: 402px; y: 335px; width: 23px; height: 13px; text: "Max"; horizontal-alignment: right; color: #8a8a8a; }
+    Group { x: 224px; y: 184px; width: 211px; height: 122px; title: "Borderless"; }
+    DlgText { x: 232px; y: 205px; width: 131px; height: 13px; text: "Enlargement Method"; wrap: no-wrap; color: #8a8a8a; }
+    Combo { x: 232px; y: 222px; width: 195px; model: ["Auto Expand", "Retain Size"]; current-index: 0; enabled: false; tip: "No Linux option: the L800 PPD has no borderless expansion control."; }
+    DlgText { x: 232px; y: 260px; width: 50px; height: 13px; text: "Expansion"; wrap: no-wrap; color: #8a8a8a; }
+    Slider { x: 288px; y: 249px; width: 139px; height: 36px; minimum: 0; maximum: 2; value: 2; enabled: false; }
+    DlgText { x: 288px; y: 285px; width: 23px; height: 13px; text: "Min"; color: #8a8a8a; }
+    DlgText { x: 346px; y: 285px; width: 23px; height: 13px; text: "Mid"; horizontal-alignment: center; color: #8a8a8a; }
+    DlgText { x: 404px; y: 285px; width: 23px; height: 13px; text: "Max"; horizontal-alignment: right; color: #8a8a8a; }
 
-    Group { x: 225px; y: 361px; width: 210px; height: 62px; title: "More Options"; }
-    CheckBox { x: 234px; y: 382px; width: 83px; height: 13px; text: "Rotate 180°"; checked <=> Prefs.rotate180; toggled => { Prefs.changed(); } }
-    CheckBox { x: 234px; y: 401px; width: 90px; height: 13px; text: "Mirror Image"; checked <=> Prefs.mirror; toggled => { Prefs.changed(); } }
+    Group { x: 224px; y: 312px; width: 211px; height: 68px; title: "More Options"; }
+    CheckBox { x: 232px; y: 333px; width: 83px; height: 13px; text: "Rotate 180°"; checked <=> Prefs.rotate180; toggled => { Prefs.changed(); } }
+    CheckBox { x: 232px; y: 355px; width: 90px; height: 13px; text: "Mirror Image"; checked <=> Prefs.mirror; toggled => { Prefs.changed(); } }
 }

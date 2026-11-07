@@ -35,7 +35,11 @@ as the Windows texts.
 The window is the Windows property sheet. E_IUICG5P adds five pages in this
 order: **Shortcuts** (904), **Main** (900), **Advanced** (901), **Page Layout**
 (902) and **Maintenance** (903). Each tab has our own 16x16 icon. Every page is
-443x434 px, laid out at the rectangles in LAYOUT.json. The sheet buttons are
+443x434 px. The pages keep the controls, labels, sizes and grouping of the
+rectangles in LAYOUT.json, re-spaced on one grid: 8 px page margin, 6 px
+between group boxes, rows 22 px (check boxes, radios) or 26 px (combo boxes)
+apart, side-by-side groups of equal height and the bottom buttons on one row
+8 px above the page bottom. Controls the L800 hides take no space. The sheet buttons are
 **OK** (save and close), **Cancel** (discard) and **Apply** (save; enabled only
 after a change). **Help** is there but disabled, because there is no help file.
 **Show Settings** (Main and Shortcuts) opens the Current Settings summary
