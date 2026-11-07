@@ -159,7 +159,9 @@ impl App {
 
     /// Like the Windows worker (FUN_00428d14): show "Please wait...", check
     /// the queue (offline/paused gives message 3000), spool the job, close the
-    /// popup, then continue.
+    /// popup, then continue. A future `status` module (bidirectional ST2
+    /// pre-checks) plugs in next to `queue_problem` here.
+    /// In dry-run the queue check is only a note, so dry-run works offline.
     fn run_job(self: &Rc<Self>, u: Utility, name: &'static str, bytes: Vec<u8>, then: impl FnOnce(&Rc<App>, JobResult) + 'static) {
         self.wait.set_utility(u.title().into());
         self.wait.set_glyph(u.icon());
@@ -172,9 +174,13 @@ impl App {
         let main = self.main.as_weak();
         let started = Instant::now();
         std::thread::spawn(move || {
-            let res = match transport::queue_problem(&queue) {
-                Some(problem) => Err(format!("{COMM_ERROR}\n\n{problem}")),
-                None => transport::submit(&mode, &queue, name, &bytes),
+            let res = match (transport::queue_problem(&queue), &mode) {
+                (Some(problem), Mode::Live) => Err(format!("{COMM_ERROR}\n\n{problem}")),
+                (Some(problem), Mode::DryRun(_)) => transport::submit(&mode, &queue, name, &bytes).map(|mut s| {
+                    s.summary.push_str(&format!("\nA real run would stop here with a communication error: {problem}"));
+                    s
+                }),
+                (None, _) => transport::submit(&mode, &queue, name, &bytes),
             };
             if let Some(rest) = MIN_WAIT.checked_sub(started.elapsed()) {
                 std::thread::sleep(rest);
