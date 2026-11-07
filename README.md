@@ -34,7 +34,7 @@ as the Windows texts.
 | Nozzle Check | Works. Pre-check, 210, "Please wait...", 211 (Good / Cleaning needed); [Clean] starts Head Cleaning |
 | Head Cleaning | Works. Pre-check, 220/226, (Power Cleaning: 360 confirm), "Please wait...", progress 223 (with status), 224/227; [Print Nozzle Check Pattern] |
 | Power Cleaning | Works, as the second radio option in Head Cleaning, with the transportation-lock warning (dialog 360) |
-| EPSON Status Monitor 3 | Works: status title and message from the Windows status table, approximate levels of the 6 ink tanks, polled every 5 s while open |
+| EPSON Status Monitor 3 | Works: status title and message from the Windows status table, approximate levels of the 6 ink tanks, polled every 5 s while open. [Print Queue] opens the GNOME printer settings |
 | Printer and Option Information | Shows what CUPS reports for the queue (`lpstat -l -p/-v/-a/-o`), read-only |
 | Print Head Alignment | Disabled ("Not available on Linux yet"): deferred, because it writes persistent values with `DD`/`SV` |
 | Paper Guide Cleaning | Disabled |
@@ -42,7 +42,7 @@ as the Windows texts.
 | Language | English only (the driver has no other UI strings) |
 
 The Windows Maintenance tab has no Print Queue button for this driver, so this
-app has none either.
+app has none either. Status Monitor 3 does have one.
 
 ### Status path and no-status path
 
@@ -195,7 +195,7 @@ in `ui/app.slint`.
 | Head Cleaning progress | 223 | 420×335 | moving print head, progress bar (status path only) |
 | Head Cleaning done | 224 / 227 | 420×335 | "cleaning cycle has finished" / "finished when the power light stops flashing", [**Print Nozzle Check Pattern**] [Finish] |
 | Messages | 270 / 271 | 371×197 | "A problem has occurred." [Details] [**OK**] / "… can not be completed.", "Now cleaning!" [**OK**] |
-| EPSON Status Monitor 3 | `E_IASRG5P` dialog 102 | 479×412 | status title and message, picture, "Approximate Ink Levels" (6 tanks), note, [**OK**] |
+| EPSON Status Monitor 3 | `E_IASRG5P` dialog 102, as arranged at run time (E_IAPRG5P `FUN_180033c9c`, detail mode) | 479×412 | white; status title (16 px), message box, picture, "Approximate Ink Levels" (6 tanks), note, [Print Queue] [**OK**] |
 | Printer and Option Information / dry-run hexdump | size of 5050 | 485×505 | read-only text, [OK] |
 
 The **bold** button is the default (drawn as the highlighted button, run by Return), as set at run time by `FUN_00425ef8`. Escape runs Cancel or Finish.

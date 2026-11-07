@@ -386,6 +386,7 @@ impl App {
     // Status Monitor 3 window.
 
     fn open_monitor(&self) {
+        self.monitor.set_printer(self.queue.clone().into());
         self.monitor.set_title_text("Please wait...".into());
         self.monitor.set_body("".into());
         let _ = self.monitor.show();
@@ -638,6 +639,12 @@ fn wire(app: &Rc<App>) {
         let _ = a.message.hide();
         a.open_monitor();
     }));
+    // "Print Queue": the GNOME printer settings show the CUPS queue.
+    app.monitor.on_print_queue(|| {
+        if let Ok(mut child) = std::process::Command::new("gnome-control-center").arg("printers").spawn() {
+            std::thread::spawn(move || child.wait());
+        }
+    });
     app.monitor.on_ok(on(|a| {
         a.monitor_timer.stop();
         let _ = a.monitor.hide();

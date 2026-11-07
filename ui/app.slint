@@ -598,52 +598,68 @@ component InkMeter inherits Rectangle {
     }
 }
 
-// EPSON Status Monitor 3, E_IASRG5P dialog 102 (319x419 DLU). Windows shows
-// or hides its sections at run time; this is the status section, the
-// "Approximate Ink Levels" group and the OK button, at the template rectangles:
-// 307 status title (5,35,224x8), 212 message (5,50,224x45), 210 picture
-// (234,35,80x60), group 311 (5,120,309x106), meters 390-395 (22+49n,130,30x42),
-// names 2700-2705 (13+49n,177,48x16), note 30601 (10,200,285x24), OK (139,216,55x14).
+// EPSON Status Monitor 3, E_IASRG5P dialog 102 (319x419 DLU template),
+// as Windows arranges it when opened from the Maintenance tab
+// (E_IAPRG5P FUN_180033c9c, "detail" mode). Views status + ink levels +
+// buttons are stacked, giving a 479x412 px client on a white background.
+// Rectangles from phase2/layout/LAYOUT.json "sm3.runtime.detail".
 export component StatusMonitorDialog inherits UtilityWindow {
     in property <string> printer: "L800";
     in property <string> title-text;
     in property <string> body;
     in property <[InkLevel]> inks;
+    // Meaning of E_IASRG5P 30699.
     in property <string> note: "The ink levels shown are estimates and can differ from the real levels. To be sure, look at the ink tanks on the printer.";
     callback ok();
+    callback print-queue();
     title: "EPSON Status Monitor 3 : " + root.printer;
     width: 479px;
     height: 412px;
+    background: #ffffff;
     default-action => { root.ok(); }
     cancel-action => { root.ok(); }
-    DlgText { x: 8px; y: 8px; width: 463px; height: 41px; text: root.printer; font-size: 14px; }
-    DlgText { x: 8px; y: 57px; width: 336px; height: 13px; text: root.title-text; font-weight: 700; }
+    // 377 banner (8,8,120x42): our own icon instead of Epson's bitmap.
+    Image { x: 8px; y: 8px + 5px; width: 32px; height: 32px; source: @image-url("icons/status-monitor.svg"); }
+    // 384 short status title (135,8,336x41), Tahoma 12 pt.
+    DlgText { x: 135px; y: 8px; width: 336px; height: 41px; text: root.title-text; font-size: 16px; vertical-alignment: center; }
+    // 212 read-only multi-line message (8,57,336x97), bordered.
     Rectangle {
-        x: 8px; y: 81px; width: 336px; height: 73px;
+        x: 8px; y: 57px; width: 336px; height: 97px;
         background: #ffffff;
         border-width: 1px;
         border-color: #a0a0a0;
         DlgText { x: 4px; y: 3px; width: parent.width - 8px; height: parent.height - 6px; text: root.body; }
     }
-    Image { x: 351px + 22px; y: 57px + 13px; width: 76px; height: 72px; source: @image-url("icons/printer.svg"); }
-    // Group 311 "Approximate Ink Levels"
+    // 210 printer picture (351,57,120x98) in a sunken frame.
     Rectangle {
-        x: 8px; y: 202px; width: 464px; height: 168px;
+        x: 351px; y: 57px; width: 120px; height: 98px;
+        border-width: 1px;
+        border-color: #a0a0a0;
+        Image { x: (parent.width - 76px) / 2; y: (parent.height - 72px) / 2; width: 76px; height: 72px; source: @image-url("icons/printer.svg"); }
+    }
+    // 30602 group box "Approximate Ink Levels" (8,195,464x172).
+    Rectangle {
+        x: 8px; y: 201px; width: 464px; height: 166px;
         border-width: 1px;
         border-color: #c8c8c8;
         border-radius: 3px;
     }
-    Rectangle { x: 14px; y: 195px; width: 130px; height: 14px; background: #f0f0f0;
+    Rectangle { x: 14px; y: 195px; width: 130px; height: 14px; background: #ffffff;
         DlgText { x: 3px; text: "Approximate Ink Levels"; wrap: no-wrap; }
     }
+    // Meters 390-395 (x 33 + 73.4n, 211, 45x68) and names 2700-2705 (x 20 + 73.4n, 288, 72x26).
     for ink[n] in root.inks: Rectangle {
-        x: (13 + 49 * n) * 1.5px;
+        property <[length]> xs: [20px, 93px, 167px, 240px, 314px, 387px];
+        x: self.xs[n];
         y: 211px;
         width: 72px;
         height: 103px;
-        InkMeter { x: 13.5px; y: 0; width: 45px; height: 68px; ink: ink; }
+        InkMeter { x: 13px; y: 0; width: 45px; height: 68px; ink: ink; }
         DlgText { x: 0; y: 77px; width: 72px; height: 26px; text: ink.name; horizontal-alignment: center; }
     }
+    // 30601 note (15,325,428x39).
     DlgText { x: 15px; y: 325px; width: 428px; height: 39px; text: root.note; }
-    DlgButton { x: 198px; y: 380px; width: 83px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
+    // 410 "Print Queue" (8,379,113x23) and IDOK "OK" (209,379,83x23, default).
+    DlgButton { x: 8px; y: 379px; width: 113px; height: 23px; text: "Print Queue"; clicked => { root.print-queue(); } }
+    DlgButton { x: 209px; y: 379px; width: 83px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
 }
