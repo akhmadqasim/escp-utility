@@ -323,6 +323,13 @@ impl<P: Port> Session<P> {
         Ok(())
     }
 
+    /// Exit is sent only after EnterIEEE was acknowledged. When Enter gets no
+    /// reply we cannot tell whether the printer switched to 1284.4 at all,
+    /// and in compatibility mode the Exit packet would just be 7 bytes of
+    /// print data. Gutenprint's escputil (`init_packet`) and ecbd also stop
+    /// without Exit when Enter fails. If the printer did switch, it leaves
+    /// 1284.4 again on the next job: every job (CUPS driver and our own
+    /// maintenance jobs) starts with the "exit packet mode" preamble.
     pub fn exit(&mut self) -> io::Result<()> {
         if self.entered {
             self.entered = false;
@@ -345,8 +352,10 @@ impl<P: Port> Session<P> {
         let c = self.close();
         let e = self.exit();
         let reply = res?;
-        c?;
-        e?;
+        // The reply is good even if closing failed; keep it and log.
+        if let Err(err) = c.and(e) {
+            eprintln!("epson-l800-utility: closing the 1284.4 session failed after a good reply: {err}");
+        }
         Ok(reply)
     }
 }
@@ -481,6 +490,24 @@ mod tests {
         s.timeout = Duration::from_millis(50);
         assert!(s.query().is_err());
         assert_eq!(s.port.writes.last().unwrap(), &EXIT.to_vec());
+    }
+
+    #[test]
+    fn reply_kept_when_close_fails() {
+        let mut sc = script();
+        sc.retain(|(k, _)| k.as_slice() != close_channel(2).as_slice());
+        let mut s = Session::new(MockPrinter::new(sc));
+        s.timeout = Duration::from_millis(50);
+        assert!(s.query().is_ok());
+        assert_eq!(s.port.writes.last().unwrap(), &EXIT.to_vec());
+    }
+
+    #[test]
+    fn no_exit_without_enter_reply() {
+        let mut s = Session::new(MockPrinter::new(vec![]));
+        s.timeout = Duration::from_millis(20);
+        assert!(s.query().is_err());
+        assert!(s.port.writes.iter().all(|w| w == &ENTER.to_vec()), "{:?}", s.port.writes);
     }
 
     #[test]

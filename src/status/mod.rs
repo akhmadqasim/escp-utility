@@ -152,22 +152,25 @@ pub fn ink_name(color: u8) -> &'static str {
 }
 
 /// Status Monitor 3 message: (title, text). Matched in the order of the
-/// Windows table `GetStatusCode` (E_IABRG5P, rea/NOTES.md §2.3). Titles are
-/// the Windows strings; the texts are our own wording with the same meaning.
+/// Windows table `GetStatusCode` (E_IABRG5P DAT_1800027e0, 33 rows of
+/// (ST, ER, WR)): rows 0-11 need ST=00 (ER absent, 00, 01, 04, 05, 06, 10,
+/// 12, 29, 37, 38, any), then ST=08, ST=0A, then WR 10-15, 20, 71-76 with
+/// any ST, then ST=02/03, 04, 07, 11, and "Communication error" for the
+/// rest. Titles are the Windows strings; the texts are our own wording.
 pub fn message(s: &Status) -> (&'static str, String) {
     let t = |a: &'static str, b: &str| (a, b.to_string());
     match (s.st, s.er) {
         (Some(0x00), None) => return t("Communication error", COMM),
         (Some(0x00), Some(0x00)) => return t("General error", RESTART),
-        (_, Some(0x01)) => return t("Printer busy", "Please wait."),
-        (_, Some(0x04)) => return t("Paper jam or CD/DVD tray jam", "For paper, switch the printer off and pull the jammed sheet out by hand. For a CD/DVD, take the tray out. Then press the Paper button on the printer."),
-        (_, Some(0x05)) => return t("Check Ink Levels", &format!("{}Check how much ink is left in the printer's ink tanks. {INK_NOTE}", low_inks(s))),
-        (_, Some(0x06)) => return t("Paper out or not loaded correctly", "Load the paper again and set the front tray to the lower (paper) position. Then press the Paper button on the printer."),
-        (_, Some(0x10)) => return t("Service required", "The printer's ink pads have reached the end of their service life. Contact Epson support."),
-        (_, Some(0x12)) => return t("Page not printed or multi-page error", "A page was not printed, several sheets were fed at once, or the wrong paper size was fed. Take the paper out, load it again, and press the Paper button if needed."),
-        (_, Some(0x29)) => return t("CD/DVD tray not set correctly", "Load the tray again, then press the Paper button on the printer."),
-        (_, Some(0x37)) => return t("Printer cover open", "Close the printer cover."),
-        (_, Some(0x38)) => return t("Front tray position error", "For paper, set the front tray to the lower (paper) position. For a CD/DVD, set it to the upper (CD/DVD) position."),
+        (Some(0x00), Some(0x01)) => return t("Printer busy", "Please wait."),
+        (Some(0x00), Some(0x04)) => return t("Paper jam or CD/DVD tray jam", "For paper, switch the printer off and pull the jammed sheet out by hand. For a CD/DVD, take the tray out. Then press the Paper button on the printer."),
+        (Some(0x00), Some(0x05)) => return t("Check Ink Levels", &format!("{}Check how much ink is left in the printer's ink tanks. {INK_NOTE}", low_inks(s))),
+        (Some(0x00), Some(0x06)) => return t("Paper out or not loaded correctly", "Load the paper again and set the front tray to the lower (paper) position. Then press the Paper button on the printer."),
+        (Some(0x00), Some(0x10)) => return t("Service required", "The printer's ink pads have reached the end of their service life. Contact Epson support."),
+        (Some(0x00), Some(0x12)) => return t("Page not printed or multi-page error", "A page was not printed, several sheets were fed at once, or the wrong paper size was fed. Take the paper out, load it again, and press the Paper button if needed."),
+        (Some(0x00), Some(0x29)) => return t("CD/DVD tray not set correctly", "Load the tray again, then press the Paper button on the printer."),
+        (Some(0x00), Some(0x37)) => return t("Printer cover open", "Close the printer cover."),
+        (Some(0x00), Some(0x38)) => return t("Front tray position error", "For paper, set the front tray to the lower (paper) position. For a CD/DVD, set it to the upper (CD/DVD) position."),
         (Some(0x00), Some(_)) => return t("Unknown error", RESTART),
         (Some(0x08), _) => return t("Initial setup error", "The printer's initial setup has not finished. Complete it on the printer."),
         (Some(0x0A), _) => return t("Printer is shutting down", "Please wait."),
@@ -193,11 +196,16 @@ const RESTART: &str = "Open the printer cover and remove any paper inside. Switc
 /// Meaning of E_IASRG5P 30699.
 pub const INK_NOTE: &str = "The ink levels shown are estimates and can differ from the real levels. To be sure, look at the ink tanks on the printer.";
 
-/// Highest-priority warning: nibble priority 7, 2, 4, 3, 1 (rea/NOTES.md §2.3).
+/// The one warning Windows matches against the table (E_IAPRG5P
+/// `FUN_18007b850`): the first whose high nibble is 7, else 2, 4, 3, 1, else
+/// the first warning. The table has rows only for 0x10-0x15, 0x20 and
+/// 0x71-0x76, so a higher-ranked 0x4x/0x3x warning hides "Ink low" there
+/// too and the window falls through to the ST rows (e.g. "Ready").
 fn top_warning(w: &[u8]) -> Option<u8> {
     [0x70, 0x20, 0x40, 0x30, 0x10]
         .iter()
         .find_map(|hi| w.iter().copied().find(|&c| c & 0xF0 == *hi))
+        .or_else(|| w.first().copied())
 }
 
 /// "Light Cyan: " style prefix for warnings 0x1n / 0x7n. The slot n is read
@@ -332,6 +340,11 @@ mod tests {
         assert_eq!(message(&st(0)).0, "Communication error");
         assert_eq!(message(&Status { warnings: vec![0x20, 0x71], ..st(4) }).0, "Ink low");
         assert_eq!(message(&Status { warnings: vec![0x20], ..st(4) }).0, "Service required");
+        // ER rows need ST=00 (Windows table rows 1-11).
+        assert_eq!(message(&Status { er: Some(0x37), ..st(4) }).0, "Ready");
+        // A 0x4x warning outranks 0x1x and has no row: Windows shows the ST row.
+        assert_eq!(message(&Status { warnings: vec![0x12, 0x41], ..st(4) }).0, "Ready");
+        assert_eq!(message(&Status { warnings: vec![0x51, 0x74], ..st(4) }).0, "Ink low");
     }
 
     fn cleaning(secs: Option<u16>) -> Result<Status, QueryError> {

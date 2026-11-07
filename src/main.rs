@@ -39,6 +39,10 @@ const CLEAN_DONE_STATUS: &str = "The cleaning cycle has finished.\n\nTo check th
 const CLEAN_DONE: &str = "Cleaning is finished when the power light on the printer stops flashing.\n\nThen click [Print Nozzle Check Pattern] to check that the cleaning worked.";
 /// Meaning of E_IHSRG5P 3000.
 const COMM_ERROR: &str = "The printer cannot be reached. Check that it is switched on and that the cable is connected. If a nozzle check pattern is printing, switch the printer off and on again to reset it.";
+/// Meaning of E_IHSRG5P 4220.
+const PAPER_GUIDE: &str = "Plain paper is used to clean the inside of the printer.\n\nLoad A4 or Letter plain paper in the printer, then click [Cleaning].\nRepeat this until the inside of the printer is clean.";
+/// Epson's download page for the L800 Linux drivers (Windows runs its own updater, E_GUPA30.EXE).
+const DRIVER_PAGE: &str = "https://download-center.epson.com/softwares/?device_id=L800&region=ID&os=DEBX64&language=en";
 /// Meaning of E_IHSRG5P 1133.
 const SEE_DETAILS: &str = "Click [Details] to see more.";
 const DRY_RUN_NOTE: &str = "Dry run: no job was sent to the printer.\n\n";
@@ -52,6 +56,7 @@ const MONITOR_POLL: Duration = Duration::from_secs(5);
 enum Utility {
     NozzleCheck,
     HeadCleaning,
+    PaperGuide,
 }
 
 impl Utility {
@@ -60,12 +65,15 @@ impl Utility {
         match self {
             Utility::NozzleCheck => "Nozzle Check",
             Utility::HeadCleaning => "Head Cleaning",
+            // String 1112 is absent from E_IHSRG5P: Windows shows no caption.
+            Utility::PaperGuide => "",
         }
     }
     fn icon(self) -> slint::Image {
         let svg: &[u8] = match self {
             Utility::NozzleCheck => include_bytes!("../ui/icons/nozzle-check.svg"),
             Utility::HeadCleaning => include_bytes!("../ui/icons/head-cleaning.svg"),
+            Utility::PaperGuide => include_bytes!("../ui/icons/paper-guide.svg"),
         };
         slint::Image::load_from_svg_data(svg).unwrap_or_default()
     }
@@ -141,6 +149,7 @@ struct App {
     power: PowerCleaningDialog,
     progress: ProgressDialog,
     cleaning_done: CleaningDoneDialog,
+    paper_guide: PaperGuideDialog,
     message: MessageDialog,
     monitor: StatusMonitorDialog,
     info: TextDialog,
@@ -191,6 +200,8 @@ impl App {
             return self.show_intro(u);
         };
         self.have_status.set(true);
+        // Paper Guide Cleaning uses the Nozzle Check column of the message
+        // tables (FUN_0041a2f8: state 0xF -> column 0), so it is not "cleaning" here.
         let cleaning = u == Utility::HeadCleaning;
         match status::precheck(&s, cleaning) {
             Precheck::Proceed => self.show_intro(u),
@@ -221,12 +232,30 @@ impl App {
                 self.cleaning.set_power(false);
                 let _ = self.cleaning.show();
             }
+            Utility::PaperGuide => {
+                self.paper_guide.set_body(PAPER_GUIDE.into());
+                let _ = self.paper_guide.show();
+            }
         }
+    }
+
+    /// Dialog 265 [Cleaning]: the same worker as the other utilities (status
+    /// re-check, paused/offline check), but on the L800 Windows sends no
+    /// bytes: its script RCDATA 1900 does not exist in E_IHBRG5P, so
+    /// FUN_00407dc4 opens and closes an empty RAW job. We send nothing.
+    /// Then the utility ends (message 0x41E closes 265).
+    fn paper_guide_cleaning(&self) {
+        let _ = self.paper_guide.hide();
+        self.run_job(Utility::PaperGuide, None, |app, res| {
+            if let Err(f) = res {
+                app.show_fail(Utility::PaperGuide, f);
+            }
+        });
     }
 
     fn nozzle_print(&self) {
         let _ = self.nozzle.hide();
-        self.run_job(Utility::NozzleCheck, "nozzle-check", commands::nozzle_check_job(Timestamp::now()), |app, res| {
+        self.run_job(Utility::NozzleCheck, Some(("nozzle-check", commands::nozzle_check_job(Timestamp::now()))), |app, res| {
             match res {
                 Ok(sent) => {
                     app.show_dump(&sent);
@@ -255,7 +284,7 @@ impl App {
             Cleaning::Normal => "head-cleaning",
             Cleaning::Power => "power-cleaning",
         };
-        self.run_job(Utility::HeadCleaning, name, commands::head_cleaning_job(kind, Timestamp::now()), |app, res| {
+        self.run_job(Utility::HeadCleaning, Some((name, commands::head_cleaning_job(kind, Timestamp::now()))), |app, res| {
             match res {
                 Ok(sent) => {
                     app.show_dump(&sent);
@@ -273,7 +302,7 @@ impl App {
     /// The Windows worker (FUN_00428d14): popup 201, re-read status (ST=00
     /// stops with message 3000), check the spooler (offline/paused stops with
     /// 3000), spool the job. In dry-run the queue check is only a note.
-    fn run_job(&self, u: Utility, name: &'static str, bytes: Vec<u8>, then: JobDone) {
+    fn run_job(&self, u: Utility, job: Option<(&'static str, Vec<u8>)>, then: JobDone) {
         self.show_wait(u);
         let (mode, queue, have_status) = (self.mode.clone(), self.queue.clone(), self.have_status.get());
         bg(
@@ -286,6 +315,9 @@ impl App {
                     if let (Some(p), Mode::Live) = (&problem, &mode) {
                         return Err(Fail::Plain(format!("{COMM_ERROR}\n\n{p}")));
                     }
+                    let Some((name, bytes)) = job else {
+                        return Ok(Sent { summary: "Nothing to send.".into(), dump: None });
+                    };
                     // No status session may be open while CUPS gets the job.
                     let submitted = {
                         let _device = status::exclusive();
@@ -375,12 +407,13 @@ impl App {
     fn show_fail(&self, u: Utility, f: Fail) {
         match f {
             Fail::Problem => self.show_message(u, COMM_ERROR, SEE_DETAILS, true),
-            // Headings: E_IHSRG5P 1128 / 1129.
+            // Headings: E_IHSRG5P 1128 / 1129 (Paper Guide Cleaning uses the
+            // Nozzle Check column).
             Fail::Plain(detail) => self.show_message(
                 u,
                 match u {
-                    Utility::NozzleCheck => "Nozzle Check can not be completed.",
                     Utility::HeadCleaning => "Head Cleaning can not be completed.",
+                    _ => "Nozzle Check can not be completed.",
                 },
                 &detail,
                 false,
@@ -549,6 +582,7 @@ fn main() -> Result<(), slint::PlatformError> {
         power: PowerCleaningDialog::new()?,
         progress: ProgressDialog::new()?,
         cleaning_done: CleaningDoneDialog::new()?,
+        paper_guide: PaperGuideDialog::new()?,
         message: MessageDialog::new()?,
         monitor: StatusMonitorDialog::new()?,
         info: TextDialog::new()?,
@@ -582,8 +616,16 @@ fn wire(ui: &App) {
             "status-monitor" => a.open_monitor(),
             "nozzle-check" => a.start(Utility::NozzleCheck),
             "head-cleaning" => a.start(Utility::HeadCleaning),
+            "paper-guide-cleaning" => a.start(Utility::PaperGuide),
             "printer-info" => a.show_printer_info(),
             _ => {}
+        }
+    });
+    // Windows runs Epson's own updater (E_GUPA30.EXE); on Linux we open
+    // Epson's driver download page for the L800 instead.
+    ui.main.on_driver_update(|| {
+        if let Ok(mut child) = std::process::Command::new("xdg-open").arg(DRIVER_PAGE).spawn() {
+            std::thread::spawn(move || child.wait());
         }
     });
     ui.main.on_close_window(|| {
@@ -635,6 +677,10 @@ fn wire(ui: &App) {
     }));
     ui.cleaning_done.on_finish(on(|a| {
         let _ = a.cleaning_done.hide();
+    }));
+    ui.paper_guide.on_cleaning(on(|a| a.paper_guide_cleaning()));
+    ui.paper_guide.on_cancel(on(|a| {
+        let _ = a.paper_guide.hide();
     }));
     ui.message.on_ok(on(|a| {
         let _ = a.message.hide();
