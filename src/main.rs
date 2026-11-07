@@ -6,6 +6,7 @@
 
 mod commands;
 mod layouts;
+mod printer;
 mod settings;
 mod status;
 mod texts;
@@ -21,6 +22,7 @@ use slint::{ComponentHandle, Timer, TimerMode};
 slint::include_modules!();
 
 use commands::{Cleaning, Timestamp};
+use printer::Identity;
 use settings::Values;
 use status::{CleaningMonitor, Precheck, QueryError, Status, Step};
 use texts::*;
@@ -79,6 +81,11 @@ enum Fail {
 }
 
 type QueryResult = Result<Status, QueryError>;
+
+/// One status query on the printer's usblp node (none: no status path).
+fn query(p: &Identity) -> QueryResult {
+    status::query(&p.queue, p.status_node().as_deref())
+}
 /// What to do on the UI thread once a job was spooled (or not).
 type JobDone = fn(&Rc<App>, Result<Sent, Fail>);
 
@@ -224,7 +231,8 @@ struct Progress {
 
 struct App {
     mode: Mode,
-    queue: String,
+    /// The queue and the printer behind it.
+    printer: Identity,
     main: MainWindow,
     wait: Lazy<WaitDialog>,
     nozzle: Lazy<NozzleCheckDialog>,
@@ -254,13 +262,14 @@ struct App {
 
 impl App {
     /// The property sheet; the dialogs are created when first opened.
-    fn new(mode: Mode, queue: String) -> Result<Rc<App>, slint::PlatformError> {
+    fn new(mode: Mode, printer: Identity) -> Result<Rc<App>, slint::PlatformError> {
         let main = MainWindow::new()?;
-        main.set_queue(queue.clone().into());
+        main.set_queue(printer.queue.clone().into());
+        main.set_maintenance(printer.maintenance());
         main.set_version_text(env!("CARGO_PKG_VERSION").into());
         Ok(Rc::new(App {
             mode,
-            queue,
+            printer,
             main,
             wait: Lazy::new(dialogs::wait),
             nozzle: Lazy::new(dialogs::nozzle),
@@ -525,7 +534,7 @@ impl App {
         p.set_commit_tick(p.get_commit_tick() + 1);
         let v = self.prefs();
         if self.dry_run() {
-            let args = settings::save_args(&self.queue, &v);
+            let args = settings::save_args(&self.printer.queue, &v);
             self.dump.set_caption("Dry run".into());
             self.dump.set_heading("Dry run: these settings were not saved. A real run would run this command:".into());
             self.dump.set_content(format!("lpoptions {}\n", args.join(" \\\n    ")).into());
@@ -535,7 +544,7 @@ impl App {
         }
         self.settings_io.set(true);
         self.refresh_busy();
-        let queue = self.queue.clone();
+        let queue = self.printer.queue.clone();
         bg(move || (quit, settings::save(&queue, &v)), |app, (quit, res)| {
             app.settings_io.set(false);
             app.refresh_busy();
@@ -581,8 +590,8 @@ impl App {
             return;
         }
         self.show_wait(u);
-        let queue = self.queue.clone();
-        bg(move || (u, at_least_min_wait(|| status::query(&queue))), |app, (u, res)| app.after_precheck(u, res));
+        let p = self.printer.clone();
+        bg(move || (u, at_least_min_wait(|| query(&p))), |app, (u, res)| app.after_precheck(u, res));
     }
 
     fn after_precheck(&self, u: Utility, res: QueryResult) {
@@ -696,11 +705,12 @@ impl App {
     /// 3000), spool the job. In dry-run the queue check is only a note.
     fn run_job(&self, u: Utility, job: Option<(&'static str, Vec<u8>)>, then: JobDone) {
         self.show_wait(u);
-        let (mode, queue, have_status) = (self.mode.clone(), self.queue.clone(), self.have_status.get());
+        let (mode, p, have_status) = (self.mode.clone(), self.printer.clone(), self.have_status.get());
+        let queue = p.queue.clone();
         bg(
             move || {
                 let res = at_least_min_wait(|| {
-                    if have_status && matches!(status::query(&queue), Ok(Status { st: Some(0x00), .. })) {
+                    if have_status && matches!(query(&p), Ok(Status { st: Some(0x00), .. })) {
                         return Err(Fail::Problem);
                     }
                     let problem = transport::queue_problem(&queue);
@@ -747,8 +757,8 @@ impl App {
         if std::mem::replace(&mut self.progress_state.borrow_mut().in_flight, true) {
             return;
         }
-        let queue = self.queue.clone();
-        bg(move || status::query(&queue), |app, res| app.on_cleaning_poll(res));
+        let p = self.printer.clone();
+        bg(move || query(&p), |app, res| app.on_cleaning_poll(res));
     }
 
     fn on_cleaning_poll(&self, res: QueryResult) {
@@ -825,7 +835,7 @@ impl App {
     // Status Monitor 3 window.
 
     fn open_monitor(&self) {
-        self.monitor.set_printer(self.queue.clone().into());
+        self.monitor.set_printer(self.printer.queue.clone().into());
         self.monitor.set_title_text("Please wait...".into());
         self.monitor.set_body("".into());
         self.open(&self.monitor);
@@ -837,8 +847,8 @@ impl App {
         if self.monitor_in_flight.replace(true) {
             return;
         }
-        let queue = self.queue.clone();
-        bg(move || status::query(&queue), |app, res| {
+        let p = self.printer.clone();
+        bg(move || query(&p), |app, res| {
             app.monitor_in_flight.set(false);
             app.show_monitor_status(res);
         });
@@ -877,11 +887,12 @@ impl App {
     fn show_printer_info(&self) {
         self.info.set_caption("Printer and Option Information".into());
         self.info.set_heading(
-            format!("The printer is used through the CUPS queue \"{}\". This is what CUPS reports for it (read-only).", self.queue).into(),
+            format!("The printer is used through the CUPS queue \"{}\". This is how the app identified it, and what CUPS reports for it (read-only).", self.printer.queue).into(),
         );
         // lpstat can be slow when cupsd is: keep it off the UI thread.
-        let queue = self.queue.clone();
-        bg(move || transport::queue_info(&queue), |app, text| {
+        let queue = self.printer.queue.clone();
+        let summary = self.printer.summary();
+        bg(move || format!("{summary}\n{}", transport::queue_info(&queue)), |app, text| {
             app.info.set_content(text.into());
             app.open(&app.info);
         });
@@ -937,7 +948,8 @@ fn fill_lists(p: &Prefs) {
 }
 
 struct Args {
-    queue: String,
+    /// --queue; otherwise the only Epson queue, or the user picks one.
+    queue: Option<String>,
     dump_dir: Option<PathBuf>,
     /// Open on the Maintenance tab (Windows: launch code EPUT).
     utility: bool,
@@ -949,11 +961,12 @@ const USAGE: &str = "Usage: epson-l800-utility [--utility] [--dry-run] [--dump-d
   --dry-run       write each job to a file and show a hexdump; never calls lp,
                   and show the lpoptions command instead of saving settings
   --dump-dir DIR  folder for dry-run files (default: ~/.cache/epson-l800-utility)
-  --queue NAME    CUPS queue of the printer (default: L800)
+  --queue NAME    CUPS queue of the printer (default: the only Epson queue;
+                  with several, a list to choose from)
 ";
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
-    let mut queue = "L800".to_string();
+    let mut queue = None;
     let mut dry = false;
     let mut dir = None;
     let mut utility = false;
@@ -963,7 +976,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--dry-run" => dry = true,
             "--utility" => utility = true,
             "--dump-dir" => dir = Some(PathBuf::from(it.next().ok_or("--dump-dir needs a value")?)),
-            "--queue" => queue = it.next().ok_or("--queue needs a value")?,
+            "--queue" => queue = Some(it.next().ok_or("--queue needs a value")?),
             "-h" | "--help" => {
                 print!("{USAGE}");
                 std::process::exit(0);
@@ -989,12 +1002,19 @@ fn main() -> Result<(), slint::PlatformError> {
             std::process::exit(2);
         }
     };
-    let app = App::new(args.dump_dir.map_or(Mode::Live, Mode::DryRun), args.queue)?;
     // The Wayland app_id (X11 WM_CLASS) of every window: GNOME matches it to
     // epson-l800-utility.desktop (StartupWMClass), so the sheet and its
     // dialogs group as one app with our icon. Must be set before any window
     // is shown (the winit windows are created on show).
     slint::set_xdg_app_id(APP_ID)?;
+    let queue = match args.queue {
+        Some(q) => q,
+        None => match choose_queue()? {
+            Some(q) => q,
+            None => return Ok(()),
+        },
+    };
+    let app = App::new(args.dump_dir.map_or(Mode::Live, Mode::DryRun), Identity::of(&queue))?;
     APP.with(|a| *a.borrow_mut() = Rc::downgrade(&app));
     app.main.set_dry_run(app.dry_run());
     app.main.set_current_tab(if args.utility { 4 } else { 1 });
@@ -1003,7 +1023,7 @@ fn main() -> Result<(), slint::PlatformError> {
     // The sheet waits for the load, so no early edit (or OK) is lost to it.
     app.settings_io.set(true);
     app.refresh_busy();
-    let queue = app.queue.clone();
+    let queue = app.printer.queue.clone();
     bg(move || settings::load(&queue), |app, res| {
         app.settings_io.set(false);
         app.refresh_busy();
@@ -1015,8 +1035,8 @@ fn main() -> Result<(), slint::PlatformError> {
     // The Ink Levels boxes on Main and Shortcuts: one status query when the
     // sheet opens (same rules as always: none while CUPS has jobs, Exit is
     // always sent). Without a reply they stay empty, like Windows.
-    let queue = app.queue.clone();
-    bg(move || status::query(&queue), |app, res| {
+    let p = app.printer.clone();
+    bg(move || query(&p), |app, res| {
         if let Ok(s) = res {
             app.main.global::<Prefs>().set_inks(slint::VecModel::from_slice(&ink_levels(&s)));
         }
@@ -1031,6 +1051,43 @@ fn main() -> Result<(), slint::PlatformError> {
     // the printer in 1284.4 mode.
     std::mem::forget(status::exclusive());
     res
+}
+
+/// The queue to open when no --queue was given: the only Epson queue, or
+/// the one picked in the chooser (None: cancelled). The chooser runs its own
+/// event loop before the sheet's.
+fn choose_queue() -> Result<Option<String>, slint::PlatformError> {
+    let queues = printer::epson_queues();
+    if let [(q, _)] = queues.as_slice() {
+        return Ok(Some(q.name.clone()));
+    }
+    let d = ChooserDialog::new()?;
+    frame(&d);
+    let labels: Vec<String> = queues
+        .iter()
+        .map(|(q, mm)| if mm.is_empty() { q.name.clone() } else { format!("{}  ({mm})", q.name) })
+        .collect();
+    d.set_queues(strings(labels.iter().map(String::as_str)));
+    let picked = Rc::new(Cell::new(None));
+    let (w, chosen) = (d.as_weak(), picked.clone());
+    d.on_ok(move || {
+        if let Some(d) = w.upgrade() {
+            chosen.set(usize::try_from(d.get_selected()).ok());
+            let _ = d.hide();
+        }
+        let _ = slint::quit_event_loop();
+    });
+    d.on_cancel(|| {
+        let _ = slint::quit_event_loop();
+    });
+    d.window().on_close_requested(|| {
+        let _ = slint::quit_event_loop();
+        slint::CloseRequestResponse::HideWindow
+    });
+    d.show()?;
+    slint::run_event_loop()?;
+    let _ = d.hide();
+    Ok(picked.get().and_then(|i| queues.get(i)).map(|(q, _)| q.name.clone()))
 }
 
 /// Connect every callback. Handlers reach the app through `app()`.
@@ -1272,7 +1329,7 @@ mod tests {
     #[test]
     fn reload_restores_the_sheet() {
         let _ = slint::platform::set_platform(Box::new(Headless));
-        let app = App::new(Mode::DryRun(std::env::temp_dir()), "L800".into()).unwrap();
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }).unwrap();
         let p = app.main.global::<Prefs>();
         fill_lists(&p);
         let d = Values::default;
@@ -1300,7 +1357,7 @@ mod tests {
     #[test]
     fn copies_are_clamped_and_committed() {
         let _ = slint::platform::set_platform(Box::new(Headless));
-        let app = App::new(Mode::DryRun(std::env::temp_dir()), "L800".into()).unwrap();
+        let app = App::new(Mode::DryRun(std::env::temp_dir()), Identity { queue: "L800".into(), ..Default::default() }).unwrap();
         let p = app.main.global::<Prefs>();
         fill_lists(&p);
         p.set_copies(0);
@@ -1319,9 +1376,9 @@ mod tests {
     }
 
     #[test]
-    fn default_is_live_on_l800() {
+    fn default_is_live_with_no_queue() {
         let a = args(&[]).unwrap();
-        assert_eq!(a.queue, "L800");
+        assert_eq!(a.queue, None);
         assert!(a.dump_dir.is_none());
     }
 
@@ -1329,7 +1386,7 @@ mod tests {
     fn dry_run_flags() {
         let a = args(&["--dry-run", "--dump-dir", "/tmp/x", "--queue", "Q"]).unwrap();
         assert_eq!(a.dump_dir.unwrap(), PathBuf::from("/tmp/x"));
-        assert_eq!(a.queue, "Q");
+        assert_eq!(a.queue.as_deref(), Some("Q"));
         assert!(args(&["--dump-dir", "/tmp/x"]).is_err());
         assert!(args(&["--bogus"]).is_err());
     }

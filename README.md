@@ -172,7 +172,7 @@ order as Source, Type, Quality, Size (M).
 | Head Cleaning | Works. Pre-check, 220/226, (Power Cleaning: 360 confirm), "Please wait...", progress 223 (with status), 224/227; [Print Nozzle Check Pattern] |
 | Power Cleaning | Works, as the second radio option in Head Cleaning, with the transportation-lock warning (dialog 360) |
 | EPSON Status Monitor 3 | Works: status title and message from the Windows status table, approximate levels of the 6 ink tanks, polled every 5 s while open. [Print Queue] opens the GNOME printer settings |
-| Printer and Option Information | Shows what CUPS reports for the queue (`lpstat -l -p/-v/-a/-o`), read-only |
+| Printer and Option Information | Shows how the app identified the printer (make and model, device URI, IEEE 1284 device ID and its source, the two gates below) and what CUPS reports for the queue (`lpstat -l -p/-v/-a/-o`), read-only |
 | Paper Guide Cleaning | Works like Windows on the L800, which is a no-op: pre-check, dialog 265 [Cancel] [**Cleaning**], then the paused/offline re-check, and **no bytes are sent**. Windows looks for its script RCDATA 1900, which does not exist in the L800 data DLL (`E_IHBRG5P`), so `FUN_00407dc4` opens and closes an empty RAW job. Then the dialog closes (rea/NOTES.md §5). In `--dry-run` a message says so, with any queue note |
 | Driver Update | Opens Epson's L800 Linux download page with `xdg-open`. Windows runs Epson's own updater (`E_GUPA30.EXE`), which has no Linux equivalent |
 | Print Head Alignment | Disabled. Its tooltip says why: it writes permanent calibration values (`DD`/`SV`) to the printer, so it stays off until a test run is approved |
@@ -216,12 +216,38 @@ only a note in the hexdump window. Dry-run never shows the progress dialog,
 because no cleaning runs. The "Please wait..." popup stays up at least 0.7 s,
 so it does not just flicker.
 
+## Which printer
+
+`src/printer.rs` finds the CUPS queue and the printer behind it. Only
+`lpstat`, `lpoptions` and one PPD download from cupsd are used; nothing is
+sent to the printer.
+
+- **Queue.** `--queue NAME` wins. Otherwise the app lists the queues with
+  `LC_ALL=C lpstat -v` and keeps the Epson ones (URI or
+  `printer-make-and-model` from `lpoptions -p`). With one it opens directly.
+  With several (or none) a small chooser comes first, [OK] [Cancel]. The
+  sheet's caption is "<queue> Printing Preferences".
+- **IEEE 1284 device ID**, parsed by `;` and `:` in any order (MFG/MANUFACTURER,
+  MDL/MODEL, CMD/COMMAND SET). From, best first: the kernel's cached
+  `/sys/class/usbmisc/lpN/device/ieee1284_id` of the `lpN` whose USB serial
+  (`device/../serial`) equals the URI's `?serial=`; the URI
+  `usb://MFG/MDL` (printer off); the PPD's `*1284DeviceID` from
+  `GET /printers/<queue>.ppd` on cupsd (network queues).
+- **Gates.** Nozzle Check, Head Cleaning and Paper Guide Cleaning need
+  `MFG:EPSON` and CMD `ESCPL2` or `ESCPR*`, the same test as Epson's Linux
+  utility (the L800 also passes when its ID has no CMD, so it works as
+  before while switched off). Otherwise they are disabled with a tooltip.
+  The status request needs `D4` in the printer's live CMD and a usblp
+  node; without it the app takes the no-status path.
+
 ## Status
 
 `src/status/` reads the status the way Windows does: the `st 01 00 01` request
 on the IEEE 1284.4 (D4) EPSON-CTRL channel (socket 2), answered with a binary
 `@BDC ST2` reply. It talks 1284.4 directly over the kernel usblp node
-`/dev/usb/lpN` (found by `MDL:L800;` in sysfs).
+`/dev/usb/lpN` of the queue's printer (see [Which printer](#which-printer)).
+It is looked up again before each query, because N changes when the
+printer is plugged in again.
 
 - usblp stays bound, so nothing changes for CUPS. One live query, including
   the `lpstat` check, took 63 ms (measured 2026-11-07). The stale-data drain
@@ -266,7 +292,7 @@ sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=usbmisc
 Without access, the app keeps working on the no-status path.
 
 One read-only status query from the command line:
-`cargo run --example status` prints the decoded fields, the Status Monitor text
+`cargo run --example status [-- QUEUE]` prints the identity, the decoded fields, the Status Monitor text
 and the pre-check result. It refuses while the queue has jobs.
 
 ## Build and run
@@ -275,7 +301,7 @@ and the pre-check result. It refuses while the queue has jobs.
 cargo build --release
 cargo test
 ./target/release/epson-l800-utility --dry-run      # safe: writes files, never calls lp
-./target/release/epson-l800-utility                # live: sends to the CUPS queue "L800"
+./target/release/epson-l800-utility                # live: sends to the Epson CUPS queue
 ```
 
 Options:
@@ -283,7 +309,8 @@ Options:
 ```
 --dry-run       write each job to a file and show a hexdump; never calls lp
 --dump-dir DIR  folder for dry-run files (default: ~/.cache/epson-l800-utility)
---queue NAME    CUPS queue of the printer (default: L800)
+--queue NAME    CUPS queue of the printer (default: the only Epson queue;
+                with several, a list to choose from)
 ```
 
 No `-dev` packages are needed. fontconfig is loaded at run time
@@ -418,6 +445,7 @@ Errors:         queue paused / not accepting / lp failed --> 271;  ST=00 before 
 ## Layout of the code
 
 - `src/commands.rs`: job bytes, with evidence comments and golden-vector tests
+- `src/printer.rs`: Epson queues, IEEE 1284 device ID, maintenance and status gates
 - `src/transport.rs`: `lp -o raw`, dry-run files, CUPS queue check and info
 - `src/status/`: 1284.4 session (`d4.rs`), usblp port (`usblp.rs`), ST2 parser
   (`st2.rs`), and in `mod.rs` the pre-check, Status Monitor messages and

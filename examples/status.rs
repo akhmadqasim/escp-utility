@@ -1,5 +1,6 @@
-//! Prints one decoded status reply from the L800 (read-only: the only data
-//! sent is the `st 01 00 01` request). Refuses while the CUPS queue has jobs.
+//! Prints one decoded status reply from the queue's printer (read-only: the
+//! only data sent is the `st 01 00 01` request). Refuses while the CUPS
+//! queue has jobs.
 //!
 //! cargo run --example status [-- QUEUE]
 
@@ -7,10 +8,16 @@
 #[allow(dead_code)] // the example uses only the query and the message tables
 mod status;
 
+#[path = "../src/printer.rs"]
+#[allow(dead_code)]
+mod printer;
+
 fn main() {
     let queue = std::env::args().nth(1).unwrap_or_else(|| "L800".into());
+    let p = printer::Identity::of(&queue);
+    print!("{}", p.summary());
     let started = std::time::Instant::now();
-    match status::query(&queue) {
+    match status::query(&queue, p.status_node().as_deref()) {
         Ok(s) => {
             let (title, text) = status::message(&s);
             println!("query took {:?}", started.elapsed());

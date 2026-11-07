@@ -42,6 +42,8 @@ export struct UtilityRow {
 // Dialog 903 "Maintenance" (295x267 DLU = 443x434 px).
 component MaintenancePage inherits Rectangle {
     in property <string> version-text;
+    // The printer takes the maintenance jobs (printer.rs Identity::maintenance).
+    in property <bool> maintenance: true;
     callback utility-clicked(string);
     callback driver-update();
     width: 443px;
@@ -82,6 +84,12 @@ component MaintenancePage inherits Rectangle {
           title-y: 319px, title-w: 300px, button-y: 320px, line-y: 336px, desc-y: 341px },
     ];
 
+    // The jobs need the maintenance gate; Status Monitor 3 and the CUPS
+    // information work for any printer.
+    pure function row-enabled(u: UtilityRow) -> bool {
+        u.enabled && (root.maintenance || u.id == "status-monitor" || u.id == "printer-info")
+    }
+
     for u in root.utilities: Rectangle {
         // 3906-3911 OWNERDRAW (40,7+38n, 27x26 DLU)
         IconButton {
@@ -90,8 +98,8 @@ component MaintenancePage inherits Rectangle {
             width: 41px;
             height: 42px;
             icon: u.icon;
-            enabled: u.enabled;
-            tip: u.tip;
+            enabled: root.row-enabled(u);
+            tip: root.row-enabled(u) ? "" : u.enabled ? Strings.no-escp : u.tip;
             clicked => { root.utility-clicked(u.id); }
         }
         // 3900-3905 LTEXT (77,6+38n, 200x8 DLU)
@@ -102,7 +110,7 @@ component MaintenancePage inherits Rectangle {
             height: 13px;
             text: u.title;
             wrap: no-wrap;
-            color: u.enabled ? #000000 : #8a8a8a;
+            color: root.row-enabled(u) ? #000000 : #8a8a8a;
         }
         // 3918-3923 ETCHEDHORZ (77,17+38n, 200x2 DLU)
         EtchedLine {
@@ -117,7 +125,7 @@ component MaintenancePage inherits Rectangle {
             width: 300px;
             height: 29px;
             text: u.description;
-            color: u.enabled ? #000000 : #8a8a8a;
+            color: root.row-enabled(u) ? #000000 : #8a8a8a;
         }
     }
 
@@ -178,6 +186,7 @@ export component MainWindow inherits FramedWindow {
     in property <string> queue: "L800";
     in property <bool> dry-run;
     in property <string> version-text;
+    in property <bool> maintenance: true;
     in-out property <int> current-tab: 1;
     // A utility dialog is open: like Windows' modal dialogs, ignore clicks here.
     in property <bool> busy;
@@ -219,6 +228,7 @@ export component MainWindow inherits FramedWindow {
             if root.current-tab == 3: PageLayoutPage { }
             if root.current-tab == 4: MaintenancePage {
                 version-text: root.version-text;
+                maintenance: root.maintenance;
                 utility-clicked(id) => { root.utility-clicked(id); }
                 driver-update => { root.driver-update(); }
             }
@@ -302,6 +312,39 @@ export component CurrentSettingsDialog inherits UtilityWindow {
     }
     CheckBox { x: 8px; y: 443px; width: 197px; height: 16px; text: "Always show current settings."; enabled: false; tip: Strings.windows-only; }
     DlgButton { x: 130px; y: 465px; width: 75px; height: 23px; text: "Close"; clicked => { root.dismiss(); } }
+}
+
+// Shown at start when CUPS has several Epson queues, or none, and no
+// --queue was given (Windows opens Printing Preferences per printer).
+export component ChooserDialog inherits UtilityWindow {
+    in property <[string]> queues;
+    in-out property <int> selected;
+    callback ok();
+    callback cancel();
+    property <length> list-y: t.y + t.height + 8px;
+    property <length> buttons-y: max(40px, root.list-y + root.queues.length * 22px) + 16px;
+    title: "Printing Preferences";
+    width: 371px;
+    client-height: root.buttons-y + 31px;
+    default-action => {
+        if (root.queues.length > 0) {
+            root.ok();
+        }
+    }
+    cancel-action => { root.cancel(); }
+    DlgIcon { x: 8px; y: 8px; source: @image-url("icons/printer-info.svg"); }
+    t := DlgText {
+        x: 48px; y: 10px; width: 315px; height: self.preferred-height;
+        text: root.queues.length > 0 ? "Choose the printer:" : "No Epson printer is set up in CUPS. Add the printer in the system's printer settings, then start this utility again.";
+    }
+    for q[i] in root.queues: Radio {
+        x: 48px; y: root.list-y + i * 22px; width: 315px; height: 16px;
+        text: q;
+        checked: root.selected == i;
+        picked => { root.selected = i; }
+    }
+    if root.queues.length > 0: DlgButton { x: 207px; y: root.buttons-y; width: 75px; height: 23px; text: "OK"; primary: true; clicked => { root.ok(); } }
+    DlgButton { x: 288px; y: root.buttons-y; width: 75px; height: 23px; text: "Cancel"; clicked => { root.cancel(); } }
 }
 
 // ---------------------------------------------------------------------------

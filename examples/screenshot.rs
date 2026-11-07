@@ -157,6 +157,12 @@ fn main() {
     prefs.set_collate(false);
     prefs.set_reduce(false);
 
+    // A printer without the maintenance gate.
+    main.set_maintenance(false);
+    main.set_current_tab(4);
+    render(&p, "main-no-escp", &main, &out);
+    main.set_maintenance(true);
+
     let d = ColorControlsDialog::new().unwrap();
     d.set_color_mode_labels(main.global::<Prefs>().get_color_mode_labels());
     d.set_gamma_labels(main.global::<Prefs>().get_gamma_labels());
@@ -265,4 +271,12 @@ fn main() {
     d.set_body("Light Cyan: You can keep printing. Refill the ink tank soon. The ink levels shown are estimates and can differ from the real levels. To be sure, look at the ink tanks on the printer.".into());
     d.set_inks(slint::VecModel::from_slice(&inks));
     render(&p, "status-monitor", &d, &out);
+
+    let d = ChooserDialog::new().unwrap();
+    let queues = ["L800  (Epson L800 Series - epson-inkjet-printer 1.0.2-1)", "ET-2750  (Epson ET-2750 Series, driverless)"];
+    d.set_queues(slint::VecModel::from_slice(&queues.map(slint::SharedString::from)));
+    render(&p, "chooser", &d, &out);
+    d.set_queues(slint::ModelRc::default());
+    render(&p, "chooser-none", &d, &out);
+
 }

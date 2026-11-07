@@ -1,4 +1,4 @@
-//! Printer status for the L800, read the way Windows reads it: the
+//! Printer status, read the way the Windows L800 driver reads it: the
 //! `st 01 00 01` request on the IEEE 1284.4 EPSON-CTRL channel, answered
 //! with a binary `@BDC ST2` reply.
 //!
@@ -19,6 +19,7 @@ pub mod d4;
 pub mod st2;
 mod usblp;
 
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -89,16 +90,18 @@ pub fn exclusive() -> std::sync::MutexGuard<'static, ()> {
     DEVICE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// One status query. Never touches the printer while CUPS has jobs.
-/// Queries are serialised through [`exclusive`].
-pub fn query(queue: &str) -> Result<Status, QueryError> {
+/// One status query on the usblp `node` of the queue's printer (printer.rs
+/// `Identity::status_node`; None: not connected, or no D4 channel). Never
+/// touches the printer while CUPS has jobs. Queries are serialised through
+/// [`exclusive`].
+pub fn query(queue: &str, node: Option<&Path>) -> Result<Status, QueryError> {
     let _guard = exclusive();
     let fail = QueryError::Failed;
     if jobs_queued(queue).map_err(fail)? {
         return Err(QueryError::Busy);
     }
-    let path = usblp::find_lp("L800").ok_or_else(|| fail("no /dev/usb/lp* for the L800".into()))?;
-    let port = usblp::UsbLp::open(&path).map_err(|e| fail(format!("{}: {e}", path.display())))?;
+    let path = node.ok_or_else(|| fail("no /dev/usb/lp* with a status channel for this printer".into()))?;
+    let port = usblp::UsbLp::open(path).map_err(|e| fail(format!("{}: {e}", path.display())))?;
     let raw = d4::Session::new(port).query().map_err(|e| fail(e.to_string()))?;
     Status::from_reply(&raw).ok_or_else(|| fail("reply is not a complete @BDC ST2".into()))
 }

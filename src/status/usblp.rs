@@ -1,14 +1,14 @@
-//! `/dev/usb/lpN` (kernel usblp) as a byte port, plus sysfs helpers.
+//! `/dev/usb/lpN` (kernel usblp) as a byte port.
 //!
 //! Going through usblp means no detach/reattach: the kernel driver stays
 //! bound. usblp allows one opener at a time.
 
 use super::d4::Port;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 pub struct UsbLp {
@@ -73,20 +73,4 @@ impl Port for UsbLp {
             Err(e) => Err(e),
         }
     }
-}
-
-/// Find `/dev/usb/lpN` whose IEEE 1284 device id contains `MDL:<model>;`.
-pub fn find_lp(model: &str) -> Option<PathBuf> {
-    let want = format!("MDL:{model};");
-    for e in fs::read_dir("/sys/class/usbmisc").ok()?.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if !name.starts_with("lp") {
-            continue;
-        }
-        let id = fs::read_to_string(e.path().join("device/ieee1284_id")).unwrap_or_default();
-        if id.contains(&want) {
-            return Some(PathBuf::from("/dev/usb").join(name));
-        }
-    }
-    None
 }
