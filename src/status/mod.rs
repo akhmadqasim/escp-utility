@@ -78,7 +78,10 @@ pub fn jobs_queued(queue: &str) -> bool {
 }
 
 /// One status query. Never touches the printer while CUPS has jobs.
+/// Queries are serialised: usblp allows only one opener.
 pub fn query(queue: &str) -> Result<Status, QueryError> {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     if jobs_queued(queue) {
         return Err(QueryError::Busy);
     }
